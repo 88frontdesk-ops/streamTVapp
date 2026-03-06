@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TV Wall</title>
+
+<style>
+    /* --- Global Dark Mode --- */
+    body {
+        margin: 0;
+        background: #0d0d0d;
+        color: #fff;
+        font-family: Arial, sans-serif;
+        overflow: hidden; /* Prevent scrolling */
+    }
+
+    /* --- Grid Layout --- */
+    .grid {
+        display: grid;
+        height: 100vh;
+        width: 100vw;
+        gap: 8px;
+        padding: 8px;
+        box-sizing: border-box;
+
+        /* 3 columns × 2 rows */
+        grid-template-columns: repeat(3, 1fr);
+        grid-template-rows: repeat(2, 1fr);
+    }
+
+    /* --- Video Frames --- */
+    .tv {
+        background: #111;
+        border-radius: 8px;
+        overflow: hidden;
+        position: relative;
+        box-shadow: 0 0 12px rgba(0,0,0,0.6);
+    }
+
+    .tv iframe,
+    .tv video {
+        border: none;
+        display: block;
+        /* width/height handled by the scaled-wrapper below */
+    }
+
+    /* wrapper that scales a fixed-size iframe to always fit the card */
+    .scaled-wrapper {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        position: relative;
+        background: #0b0b0b;
+    }
+
+    .scaled-wrapper .scaled-viewport {
+        position: absolute;
+        left: 0;
+        top: 0;
+        transform-origin: 0 0;
+        will-change: transform;
+    }
+
+    /* URL input overlay */
+    .url-bar {
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        top: 8px;
+        display: flex;
+        gap: 6px;
+        z-index: 5;
+    }
+
+    .url-bar input[type="text"] {
+        flex: 1;
+        padding: 6px 8px;
+        border-radius: 6px;
+        border: none;
+        background: rgba(255,255,255,0.08);
+        color: #fff;
+        outline: none;
+    }
+
+    .url-bar button {
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: none;
+        background: #1f8ef1;
+        color: #fff;
+        cursor: pointer;
+    }
+
+    /* --- Responsive fallback for tall screens (2×3) --- */
+    @media (max-aspect-ratio: 4/3) {
+        .grid {
+            grid-template-columns: repeat(2, 1fr);
+            grid-template-rows: repeat(3, 1fr);
+        }
+    }
+</style>
+</head>
+
+<body>
+
+<div class="grid">
+
+    <!-- Interactive cards: paste a URL and press Enter or Load -->
+    <div class="tv"></div>
+    <div class="tv"></div>
+    <div class="tv"></div>
+    <div class="tv"></div>
+    <div class="tv"></div>
+    <div class="tv"></div>
+
+</div>
+
+<script>
+    const BASE_W = 1280;
+    const BASE_H = 720;
+
+    function toEmbed(url) {
+        try {
+            // Accept URLs missing protocol
+            const maybe = url.startsWith('http') ? url : 'https://' + url;
+            const u = new URL(maybe);
+
+            // Convert YouTube watch URLs to embed URL
+            if (u.hostname.includes('youtube.com')) {
+                const v = u.searchParams.get('v');
+                if (v) return 'https://www.youtube.com/embed/' + v;
+                if (u.pathname.startsWith('/embed/')) return url;
+            }
+
+            // If user pasted a bare youtube short link
+            if (u.hostname === 'youtu.be') {
+                const id = u.pathname.slice(1);
+                if (id) return 'https://www.youtube.com/embed/' + id;
+            }
+
+            // Twitch channel or clip -> player embed
+            if (u.hostname.includes('twitch.tv') || u.hostname === 'clips.twitch.tv' || u.hostname === 'm.twitch.tv' || u.hostname === 'www.twitch.tv') {
+                const parent = window.location.hostname || 'localhost';
+
+                // clip URL (clips.twitch.tv/Slug or twitch.tv/ClipName/clip/...)
+                if (u.hostname.includes('clips.twitch.tv')) {
+                    const clip = u.pathname.split('/').filter(Boolean)[0];
+                    if (clip) return 'https://clips.twitch.tv/embed?clip=' + clip + '&parent=' + parent;
+                }
+
+                // If it's already player.twitch.tv, ensure parent present
+                if (u.hostname.includes('player.twitch.tv')) {
+                    if (u.searchParams.has('parent')) return url;
+                    return url + (url.includes('?') ? '&' : '?') + 'parent=' + parent;
+                }
+
+                // channel page like twitch.tv/channelName
+                const parts = u.pathname.split('/').filter(Boolean);
+                const channel = parts[0] || '';
+                if (channel && channel !== 'videos' && channel !== 'directory') {
+                    return 'https://player.twitch.tv/?channel=' + channel + '&parent=' + parent + '&autoplay=true';
+                }
+            }
+
+            return url;
+        } catch (e) {
+            return url;
+        }
+    }
+
+    function updateScaleForCard(card) {
+        const wrapper = card.querySelector('.scaled-wrapper');
+        const viewport = card.querySelector('.scaled-viewport');
+        if (!wrapper || !viewport) return;
+        const cw = wrapper.clientWidth;
+        const ch = wrapper.clientHeight;
+        const scale = Math.min(cw / BASE_W, ch / BASE_H, 1);
+        viewport.style.transform = 'scale(' + scale + ')';
+        viewport.style.width = BASE_W + 'px';
+        viewport.style.height = BASE_H + 'px';
+        const top = Math.max(0, (ch - BASE_H * scale) / 2);
+        const left = Math.max(0, (cw - BASE_W * scale) / 2);
+        viewport.style.top = top + 'px';
+        viewport.style.left = left + 'px';
+    }
+
+    function createCard(cardElem, initialUrl) {
+        const urlBar = document.createElement('div');
+        urlBar.className = 'url-bar';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'Paste URL and press Enter';
+        if (initialUrl) input.value = initialUrl;
+        const btn = document.createElement('button');
+        btn.textContent = 'Load';
+        urlBar.append(input, btn);
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'scaled-wrapper';
+        const viewport = document.createElement('div');
+        viewport.className = 'scaled-viewport';
+        wrapper.append(viewport);
+
+        cardElem.innerHTML = '';
+        cardElem.append(urlBar, wrapper);
+
+        function load(url) {
+            if (!url) return;
+            const safeUrl = toEmbed(url);
+            const iframe = document.createElement('iframe');
+            iframe.src = safeUrl;
+            iframe.width = BASE_W;
+            iframe.height = BASE_H;
+            iframe.setAttribute('allowfullscreen', '');
+            iframe.setAttribute('allow', 'autoplay; fullscreen; encrypted-media');
+            viewport.innerHTML = '';
+            viewport.append(iframe);
+            // allow iframe to settle then update scale
+            requestAnimationFrame(() => updateScaleForCard(cardElem));
+        }
+
+        btn.addEventListener('click', () => load(input.value.trim()));
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(input.value.trim()); });
+
+        if (initialUrl) load(initialUrl);
+    }
+
+    // Initialize cards with default URLs (one per card)
+    const defaultUrls = [
+        'https://www.twitch.tv/topmedia_topnews',
+        'https://balkanweb.com/tvplayer-2/?v=5',
+        'https://www.oranews.tv/livetv2.php',
+        'https://pluto.tv/us/live-tv/63d025db4e83e700086eaa96?msockid=2ec4ca9ed8e56bca02bedc1bd9826a3c',
+        'https://pluto.tv/us/live-tv/5421f71da6af422839419cb3?msockid=2ec4ca9ed8e56bca02bedc1bd9826a3c',
+        'https://pluto.tv/us/live-tv/5dc9b8223687ff000936ed79?msockid=2ec4ca9ed8e56bca02bedc1bd9826a3c'
+    ];
+
+    const cards = document.querySelectorAll('.tv');
+    cards.forEach((c, i) => createCard(c, defaultUrls[i] || ''));
+
+    // Recompute scales on resize
+    window.addEventListener('resize', () => cards.forEach(updateScaleForCard));
+
+</script>
+
+</body>
+</html>
