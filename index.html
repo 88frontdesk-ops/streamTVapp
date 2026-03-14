@@ -216,8 +216,6 @@
                 iframe.loading = 'lazy';
                 iframe.setAttribute('allowfullscreen', '');
                 iframe.setAttribute('allow', 'autoplay;fullscreen;encrypted-media');
-                // Autoplay audio only for first card
-                if (mode === 'tv' && index !== 0) iframe.muted = true;
                 viewport.innerHTML = '';
                 viewport.append(iframe);
                 requestAnimationFrame(() => updateScale(card));
