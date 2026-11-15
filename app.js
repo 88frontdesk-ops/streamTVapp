@@ -3,6 +3,21 @@ const BASE_H = 720;
 const LOAD_DELAY = 1500;
 const PRESET_STORAGE_PREFIX = 'tv-preset-';
 const ACTIVE_PRESET_STORAGE_KEY = 'tv-active-preset';
+const EMPTY_PRESET_VALUE = '__empty__';
+const REMOVED_PRESET_URLS = new Set([
+    'https://www.youtube.com/watch?v=gCNeDWCI0vo',
+    'https://www.youtube.com/watch?v=h3MuIUNCCzI',
+    'https://www.youtube.com/watch?v=LuKwFajn37U',
+    'https://www.youtube.com/watch?v=bNyUyrR0PHo',
+    'https://www.euronews.com/live',
+    'https://www.youtube.com/watch?v=9NyxcX3rhQs',
+    'https://www.cbsnews.com/newyork/live/',
+    'https://www.cbsnews.com/losangeles/live/',
+    'https://www.cbsnews.com/chicago/live/',
+    'https://www.cbsnews.com/texas/live/',
+    'https://www.cbsnews.com/miami/live/',
+    'https://www.cbsnews.com/live/'
+]);
 
 const presetSelect = document.querySelector('#preset-select');
 const storedPresetIndex = Number(localStorage.getItem(ACTIVE_PRESET_STORAGE_KEY));
@@ -15,11 +30,18 @@ let activePresetIndex = Number.isInteger(storedPresetIndex) &&
 function getPresetUrl(presetIndex, channelIndex) {
     const key = `${PRESET_STORAGE_PREFIX}${presetIndex}-${channelIndex}`;
     const saved = localStorage.getItem(key);
-    if (saved !== null) return saved;
+    if (saved === EMPTY_PRESET_VALUE) return '';
+    if (saved !== null && saved !== '') {
+        if (REMOVED_PRESET_URLS.has(saved)) {
+            localStorage.setItem(key, EMPTY_PRESET_VALUE);
+            return '';
+        }
+        return saved;
+    }
 
     if (presetIndex === 0) {
         const legacySaved = localStorage.getItem('tv' + channelIndex);
-        if (legacySaved !== null) {
+        if (legacySaved) {
             localStorage.setItem(key, legacySaved);
             return legacySaved;
         }
@@ -108,7 +130,10 @@ function createCard(card, index) {
 
     function load(url) {
         const value = url.trim();
-        localStorage.setItem(`${PRESET_STORAGE_PREFIX}${activePresetIndex}-${index}`, value);
+        localStorage.setItem(
+            `${PRESET_STORAGE_PREFIX}${activePresetIndex}-${index}`,
+            value || EMPTY_PRESET_VALUE
+        );
         if (!value) {
             unload();
             return;
@@ -143,9 +168,10 @@ cards.forEach((card, i) => {
 
 function saveCurrentPreset() {
     controllers.forEach((controller, index) => {
+        const value = controller.input.value.trim();
         localStorage.setItem(
             `${PRESET_STORAGE_PREFIX}${activePresetIndex}-${index}`,
-            controller.input.value.trim()
+            value || EMPTY_PRESET_VALUE
         );
     });
 }
