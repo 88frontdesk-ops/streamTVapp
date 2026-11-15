@@ -6,3 +6,9 @@ window.DEFAULT_URLS = [
     'https://abcnews.com/video/embed?id=abc_live11',
     'https://www.cbsnews.com/cbslocal/video/live-newyork/'
 ];
+
+window.DEFAULT_PRESETS = [
+    window.DEFAULT_URLS,
+    [],
+    []
+];

@@ -1,6 +1,34 @@
 const BASE_W = 1280;
 const BASE_H = 720;
 const LOAD_DELAY = 1500;
+const PRESET_STORAGE_PREFIX = 'tv-preset-';
+const ACTIVE_PRESET_STORAGE_KEY = 'tv-active-preset';
+
+const presetSelect = document.querySelector('#preset-select');
+const storedPresetIndex = Number(localStorage.getItem(ACTIVE_PRESET_STORAGE_KEY));
+let activePresetIndex = Number.isInteger(storedPresetIndex) &&
+    storedPresetIndex >= 0 &&
+    storedPresetIndex < window.DEFAULT_PRESETS.length
+    ? storedPresetIndex
+    : 0;
+
+function getPresetUrl(presetIndex, channelIndex) {
+    const key = `${PRESET_STORAGE_PREFIX}${presetIndex}-${channelIndex}`;
+    const saved = localStorage.getItem(key);
+    if (saved !== null) return saved;
+
+    if (presetIndex === 0) {
+        const legacySaved = localStorage.getItem('tv' + channelIndex);
+        if (legacySaved !== null) {
+            localStorage.setItem(key, legacySaved);
+            return legacySaved;
+        }
+    }
+
+    return window.DEFAULT_PRESETS[presetIndex][channelIndex] || '';
+}
+
+presetSelect.value = String(activePresetIndex);
 
 // ----- Detect if device is TV / large fullscreen -----
 function detectMode() {
@@ -58,8 +86,7 @@ function createCard(card, index) {
 
     const input = document.createElement('input');
     input.type = 'text';
-    const saved = localStorage.getItem('tv' + index);
-    input.value = saved || window.DEFAULT_URLS[index] || '';
+    input.value = getPresetUrl(activePresetIndex, index);
 
     const btn = document.createElement('button');
     btn.textContent = 'Load';
@@ -80,9 +107,13 @@ function createCard(card, index) {
     function unload() { viewport.innerHTML = ''; }
 
     function load(url) {
-        if (!url) return;
-        localStorage.setItem('tv' + index, url);
-        const safe = toEmbed(url);
+        const value = url.trim();
+        localStorage.setItem(`${PRESET_STORAGE_PREFIX}${activePresetIndex}-${index}`, value);
+        if (!value) {
+            unload();
+            return;
+        }
+        const safe = toEmbed(value);
         const iframe = document.createElement('iframe');
         iframe.src = safe;
         iframe.width = BASE_W;
@@ -110,14 +141,48 @@ cards.forEach((card, i) => {
     controllers.push(createCard(card, i));
 });
 
-// ----- Sequential load for performance -----
-function loadSequentially() {
-    controllers.forEach((c, i) => {
-        const url = c.input.value.trim();
-        if (!url) return;
-        setTimeout(() => { c.load(url); }, i * LOAD_DELAY);
+function saveCurrentPreset() {
+    controllers.forEach((controller, index) => {
+        localStorage.setItem(
+            `${PRESET_STORAGE_PREFIX}${activePresetIndex}-${index}`,
+            controller.input.value.trim()
+        );
     });
 }
+
+// ----- Sequential load for performance -----
+let loadTimers = [];
+function loadSequentially() {
+    loadTimers.forEach(clearTimeout);
+    loadTimers = [];
+    controllers.forEach((c, i) => {
+        const url = c.input.value.trim();
+        if (!url) {
+            c.unload();
+            return;
+        }
+        loadTimers.push(setTimeout(() => { c.load(url); }, i * LOAD_DELAY));
+    });
+}
+
+presetSelect.addEventListener('change', () => {
+    const nextPresetIndex = Number(presetSelect.value);
+    if (!Number.isInteger(nextPresetIndex) ||
+        nextPresetIndex < 0 ||
+        nextPresetIndex >= window.DEFAULT_PRESETS.length) {
+        return;
+    }
+
+    saveCurrentPreset();
+    activePresetIndex = nextPresetIndex;
+    localStorage.setItem(ACTIVE_PRESET_STORAGE_KEY, String(activePresetIndex));
+
+    controllers.forEach((controller, index) => {
+        controller.input.value = getPresetUrl(activePresetIndex, index);
+        controller.unload();
+    });
+    loadSequentially();
+});
 
 // ----- Start -----
 window.addEventListener('load', () => {
