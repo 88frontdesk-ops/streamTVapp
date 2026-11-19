@@ -1,6 +1,11 @@
 const BASE_W = 1280;
 const BASE_H = 720;
 const LOAD_DELAY = 1500;
+const RSS_JSON_API_URL = 'https://api.rss2json.com/v1/api.json?rss_url=';
+const RSS_REFRESH_INTERVAL = 3 * 60 * 1000;
+const RSS_EMPTY_FEED_RETENTION = 60 * 60 * 1000;
+const NEWS_STORY_INTERVAL = 6 * 1000;
+const RSS_FETCH_TIMEOUT = 15 * 1000;
 const PRESET_STORAGE_PREFIX = 'tv-preset-';
 const ACTIVE_PRESET_STORAGE_KEY = 'tv-active-preset';
 const EMPTY_PRESET_VALUE = '__empty__';
@@ -527,3 +532,232 @@ window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => { cards.forEach(updateScale); }, 120);
 }, { passive: true });
+
+// ----- Live RSS headlines -----
+const newsSource = document.querySelector('.news-source');
+const newsHeadline = document.querySelector('.news-headline');
+const newsSummary = document.querySelector('.news-summary');
+const newsPosted = document.querySelector('.news-posted');
+const feedStories = new Map();
+const emptyFeedSince = new Map();
+let newsStories = [];
+let currentStoryIndex = -1;
+let currentStory = null;
+let newsStoryTimer;
+
+function getFeedItemLink(item) {
+    const atomLink = item.querySelector('link[rel="alternate"], link:not([rel])');
+    const rawLink = atomLink?.getAttribute('href') || item.querySelector('link')?.textContent.trim();
+    if (!rawLink) return '';
+    try {
+        const url = new URL(rawLink);
+        return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
+    } catch {
+        return '';
+    }
+}
+
+function cleanFeedSummary(rawSummary) {
+    if (!rawSummary) return '';
+    const text = new DOMParser()
+        .parseFromString(rawSummary, 'text/html')
+        .body.textContent.replace(/\s+/g, ' ')
+        .trim();
+    return text.length > 320 ? `${text.slice(0, 317).trimEnd()}…` : text;
+}
+
+function parseFeed(xmlText, feed) {
+    const xml = new DOMParser().parseFromString(xmlText, 'application/xml');
+    if (xml.querySelector('parsererror')) {
+        throw new Error('The feed returned invalid XML.');
+    }
+
+    return [...xml.querySelectorAll('item, entry')]
+        .map(item => {
+            const title = item.querySelector('title')?.textContent.trim();
+            const link = getFeedItemLink(item);
+            const summaryNode = item.querySelector('description, summary, content') ||
+                item.getElementsByTagNameNS('*', 'encoded')[0];
+            const published = item.querySelector('pubDate, published, updated, date')?.textContent.trim();
+            const publishedAt = published ? Date.parse(published) : 0;
+            return {
+                title,
+                link,
+                summary: cleanFeedSummary(summaryNode?.textContent),
+                published: Number.isFinite(publishedAt) ? publishedAt : 0,
+                source: feed.name,
+                category: feed.category
+            };
+        })
+        .filter(story => story.title && story.link)
+        .sort((a, b) => b.published - a.published)
+        .slice(0, 4);
+}
+
+async function fetchFeed(feed) {
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), RSS_FETCH_TIMEOUT);
+    try {
+        try {
+            const response = await fetch(feed.url, { signal: abortController.signal });
+            if (!response.ok) {
+                throw new Error(`Feed request failed with status ${response.status}.`);
+            }
+            return { feed, stories: parseFeed(await response.text(), feed) };
+        } catch (error) {
+            if (!feed.rss2jsonFallback) throw error;
+
+            const response = await fetch(
+                RSS_JSON_API_URL + encodeURIComponent(feed.url),
+                { signal: abortController.signal }
+            );
+            if (!response.ok) {
+                throw new Error(`RSS fallback failed with status ${response.status}.`);
+            }
+            const data = await response.json();
+            if (data.status !== 'ok') {
+                throw new Error(data.message || 'The RSS fallback could not read this feed.');
+            }
+            const stories = data.items
+                .map(item => ({
+                    title: item.title?.trim(),
+                    link: item.link,
+                    summary: cleanFeedSummary(item.description || item.content),
+                    published: item.pubDate ? Date.parse(item.pubDate) : 0,
+                    source: feed.name,
+                    category: feed.category
+                }))
+                .filter(story => story.title && story.link &&
+                    (story.link.startsWith('http://') || story.link.startsWith('https://')))
+                .sort((a, b) => b.published - a.published)
+                .slice(0, 4);
+            return { feed, stories };
+        }
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+function renderNewsStory(story) {
+    newsSource.textContent = `${story.category} · ${story.source}`;
+    newsHeadline.textContent = story.title;
+    newsHeadline.href = story.link;
+    newsHeadline.target = '_blank';
+    newsHeadline.rel = 'noopener noreferrer';
+    newsSummary.textContent = story.summary;
+    newsSummary.hidden = !story.summary;
+    if (story.published > 0) {
+        const publishedDate = new Date(story.published);
+        newsPosted.dateTime = publishedDate.toISOString();
+        newsPosted.textContent = `Posted ${new Intl.DateTimeFormat(undefined, {
+            dateStyle: 'medium',
+            timeStyle: 'short'
+        }).format(publishedDate)}`;
+        newsPosted.setAttribute('aria-label', newsPosted.textContent);
+        newsPosted.hidden = false;
+    } else {
+        newsPosted.textContent = '';
+        newsPosted.removeAttribute('datetime');
+        newsPosted.removeAttribute('aria-label');
+        newsPosted.hidden = true;
+    }
+    const storyElement = newsHeadline.parentElement;
+    storyElement.classList.remove('headline-enter');
+    void storyElement.offsetWidth;
+    storyElement.classList.add('headline-enter');
+    clearTimeout(newsStoryTimer);
+    newsStoryTimer = setTimeout(showNextNewsStory, NEWS_STORY_INTERVAL);
+}
+
+function showNextNewsStory() {
+    if (newsStories.length === 0) return;
+    if (currentStory) {
+        const preservedIndex = newsStories.findIndex(story =>
+            story.category === currentStory.category &&
+            story.source === currentStory.source &&
+            story.link === currentStory.link
+        );
+        currentStoryIndex = preservedIndex >= 0
+            ? preservedIndex
+            : Math.min(currentStoryIndex, newsStories.length - 1);
+    }
+    currentStoryIndex = (currentStoryIndex + 1) % newsStories.length;
+    currentStory = newsStories[currentStoryIndex];
+    renderNewsStory(currentStory);
+}
+
+function rebuildNewsStories() {
+    newsStories = [];
+    const categories = new Map();
+    window.DEFAULT_RSS_FEEDS.forEach(feed => {
+        if (!categories.has(feed.category)) categories.set(feed.category, []);
+        categories.get(feed.category).push(feed);
+    });
+    const feedsByCategory = [...categories.values()];
+    const maxFeedCount = Math.max(0, ...feedsByCategory.map(feeds => feeds.length));
+    for (let feedIndex = 0; feedIndex < maxFeedCount; feedIndex++) {
+        feedsByCategory.forEach(feeds => {
+            const feed = feeds[feedIndex];
+            if (!feed) return;
+            newsStories.push(...(feedStories.get(feed.url) || []));
+        });
+    }
+}
+
+function mergeFeedStories(existingStories, fetchedStories) {
+    const mergedStories = new Map();
+    [...fetchedStories, ...existingStories].forEach(story => {
+        if (!mergedStories.has(story.link)) mergedStories.set(story.link, story);
+    });
+    return [...mergedStories.values()].slice(0, 4);
+}
+
+function updateFeedStories(url, fetchedStories, refreshedAt) {
+    const existingStories = feedStories.get(url) || [];
+    if (fetchedStories.length === 0) {
+        if (existingStories.length === 0) return;
+
+        const emptySince = emptyFeedSince.get(url) ?? refreshedAt;
+        if (refreshedAt - emptySince >= RSS_EMPTY_FEED_RETENTION) {
+            feedStories.delete(url);
+            emptyFeedSince.delete(url);
+        } else {
+            emptyFeedSince.set(url, emptySince);
+        }
+        return;
+    }
+
+    emptyFeedSince.delete(url);
+    feedStories.set(url, mergeFeedStories(existingStories, fetchedStories));
+}
+
+async function refreshNewsFeeds() {
+    const results = await Promise.all(window.DEFAULT_RSS_FEEDS.map(async feed => {
+        try {
+            return await fetchFeed(feed);
+        } catch (error) {
+            console.warn(`Unable to refresh RSS feed "${feed.name}".`, error);
+            return { feed, error };
+        }
+    }));
+
+    const refreshedAt = Date.now();
+    results.forEach(result => {
+        if (!result.stories) return;
+        updateFeedStories(result.feed.url, result.stories, refreshedAt);
+    });
+    rebuildNewsStories();
+
+    if (newsStories.length === 0 && !currentStory) {
+        newsSource.textContent = 'News sources';
+        newsHeadline.removeAttribute('href');
+        newsHeadline.textContent = 'Headlines could not be loaded. Check your connection and try again later.';
+        newsPosted.hidden = true;
+        return;
+    }
+
+    if (newsStories.length > 0 && !currentStory) showNextNewsStory();
+}
+
+refreshNewsFeeds();
+setInterval(refreshNewsFeeds, RSS_REFRESH_INTERVAL);

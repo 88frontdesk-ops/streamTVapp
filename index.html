@@ -17,12 +17,26 @@
 <body>
 
     <div class="preset-bar">
-        <label for="preset-select">Preset:</label>
-        <select id="preset-select">
-            <option value="0">Preset 1 - Default</option>
-            <option value="1">Preset 2</option>
-            <option value="2">Preset 3</option>
-        </select>
+        <div class="preset-controls">
+            <label for="preset-select">Preset:</label>
+            <select id="preset-select">
+                <option value="0">Preset 1 - Default</option>
+                <option value="1">Preset 2</option>
+                <option value="2">Preset 3</option>
+            </select>
+        </div>
+        <section class="news-ticker" aria-label="Live news">
+            <div class="news-brand">
+                <span class="news-live-dot" aria-hidden="true"></span>
+                <span>LIVE NEWS</span>
+            </div>
+            <div class="news-story" aria-live="polite">
+                <span class="news-source">Loading headlines</span>
+                <a class="news-headline" tabindex="-1">Fetching the latest stories…</a>
+                <p class="news-summary" hidden></p>
+            </div>
+            <time class="news-posted" hidden></time>
+        </section>
     </div>
 
     <div class="grid"></div>
