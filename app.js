@@ -1,10 +1,9 @@
 const BASE_W = 1280;
 const BASE_H = 720;
 const LOAD_DELAY = 1500;
-const RSS_JSON_API_URL = 'https://api.rss2json.com/v1/api.json?rss_url=';
-const RSS_REFRESH_INTERVAL = 3 * 60 * 1000;
 const RSS_EMPTY_FEED_RETENTION = 60 * 60 * 1000;
 const NEWS_STORY_INTERVAL = 6 * 1000;
+const NEWS_REFRESH_SUMMARY_INTERVAL = 2 * 1000;
 const RSS_FETCH_TIMEOUT = 15 * 1000;
 const PRESET_STORAGE_PREFIX = 'tv-preset-';
 const ACTIVE_PRESET_STORAGE_KEY = 'tv-active-preset';
@@ -598,41 +597,11 @@ async function fetchFeed(feed) {
     const abortController = new AbortController();
     const timeout = setTimeout(() => abortController.abort(), RSS_FETCH_TIMEOUT);
     try {
-        try {
-            const response = await fetch(feed.url, { signal: abortController.signal });
-            if (!response.ok) {
-                throw new Error(`Feed request failed with status ${response.status}.`);
-            }
-            return { feed, stories: parseFeed(await response.text(), feed) };
-        } catch (error) {
-            if (!feed.rss2jsonFallback) throw error;
-
-            const response = await fetch(
-                RSS_JSON_API_URL + encodeURIComponent(feed.url),
-                { signal: abortController.signal }
-            );
-            if (!response.ok) {
-                throw new Error(`RSS fallback failed with status ${response.status}.`);
-            }
-            const data = await response.json();
-            if (data.status !== 'ok') {
-                throw new Error(data.message || 'The RSS fallback could not read this feed.');
-            }
-            const stories = data.items
-                .map(item => ({
-                    title: item.title?.trim(),
-                    link: item.link,
-                    summary: cleanFeedSummary(item.description || item.content),
-                    published: item.pubDate ? Date.parse(item.pubDate) : 0,
-                    source: feed.name,
-                    category: feed.category
-                }))
-                .filter(story => story.title && story.link &&
-                    (story.link.startsWith('http://') || story.link.startsWith('https://')))
-                .sort((a, b) => b.published - a.published)
-                .slice(0, 4);
-            return { feed, stories };
+        const response = await fetch(feed.url, { signal: abortController.signal });
+        if (!response.ok) {
+            throw new Error(`Feed request failed with status ${response.status}.`);
         }
+        return { feed, stories: parseFeed(await response.text(), feed) };
     } finally {
         clearTimeout(timeout);
     }
@@ -669,6 +638,25 @@ function renderNewsStory(story) {
     newsStoryTimer = setTimeout(showNextNewsStory, NEWS_STORY_INTERVAL);
 }
 
+function showNewsStatus(message) {
+    newsSource.textContent = 'News sources';
+    newsHeadline.removeAttribute('href');
+    newsHeadline.removeAttribute('target');
+    newsHeadline.removeAttribute('rel');
+    newsHeadline.textContent = message;
+    newsSummary.textContent = '';
+    newsSummary.hidden = true;
+    newsPosted.textContent = '';
+    newsPosted.removeAttribute('datetime');
+    newsPosted.removeAttribute('aria-label');
+    newsPosted.hidden = true;
+
+    const storyElement = newsHeadline.parentElement;
+    storyElement.classList.remove('headline-enter');
+    void storyElement.offsetWidth;
+    storyElement.classList.add('headline-enter');
+}
+
 function showNextNewsStory() {
     if (newsStories.length === 0) return;
     if (currentStory) {
@@ -677,9 +665,17 @@ function showNextNewsStory() {
             story.source === currentStory.source &&
             story.link === currentStory.link
         );
-        currentStoryIndex = preservedIndex >= 0
+        const lastShownIndex = preservedIndex >= 0
             ? preservedIndex
             : Math.min(currentStoryIndex, newsStories.length - 1);
+        if (lastShownIndex === newsStories.length - 1) {
+            currentStory = null;
+            currentStoryIndex = -1;
+            showNewsStatus('Refreshing feeds…');
+            refreshNewsFeeds(true);
+            return;
+        }
+        currentStoryIndex = lastShownIndex;
     }
     currentStoryIndex = (currentStoryIndex + 1) % newsStories.length;
     currentStory = newsStories[currentStoryIndex];
@@ -688,20 +684,9 @@ function showNextNewsStory() {
 
 function rebuildNewsStories() {
     newsStories = [];
-    const categories = new Map();
     window.DEFAULT_RSS_FEEDS.forEach(feed => {
-        if (!categories.has(feed.category)) categories.set(feed.category, []);
-        categories.get(feed.category).push(feed);
+        newsStories.push(...(feedStories.get(feed.url) || []));
     });
-    const feedsByCategory = [...categories.values()];
-    const maxFeedCount = Math.max(0, ...feedsByCategory.map(feeds => feeds.length));
-    for (let feedIndex = 0; feedIndex < maxFeedCount; feedIndex++) {
-        feedsByCategory.forEach(feeds => {
-            const feed = feeds[feedIndex];
-            if (!feed) return;
-            newsStories.push(...(feedStories.get(feed.url) || []));
-        });
-    }
 }
 
 function mergeFeedStories(existingStories, fetchedStories) {
@@ -731,7 +716,7 @@ function updateFeedStories(url, fetchedStories, refreshedAt) {
     feedStories.set(url, mergeFeedStories(existingStories, fetchedStories));
 }
 
-async function refreshNewsFeeds() {
+async function refreshNewsFeeds(showSummary = false) {
     const results = await Promise.all(window.DEFAULT_RSS_FEEDS.map(async feed => {
         try {
             return await fetchFeed(feed);
@@ -742,17 +727,34 @@ async function refreshNewsFeeds() {
     }));
 
     const refreshedAt = Date.now();
+    const newPostUrls = new Set();
     results.forEach(result => {
         if (!result.stories) return;
+        const existingLinks = new Set(
+            (feedStories.get(result.feed.url) || []).map(story => story.link)
+        );
+        if (result.stories.some(story => !existingLinks.has(story.link))) {
+            newPostUrls.add(result.feed.url);
+        }
         updateFeedStories(result.feed.url, result.stories, refreshedAt);
     });
     rebuildNewsStories();
 
+    if (showSummary) {
+        const count = newPostUrls.size;
+        showNewsStatus(`${count} feed URL${count === 1 ? '' : 's'} returned new posts.`);
+        newsStoryTimer = setTimeout(() => {
+            if (newsStories.length > 0) {
+                showNextNewsStory();
+                return;
+            }
+            showNewsStatus('Headlines could not be loaded. Check your connection and try again later.');
+        }, NEWS_REFRESH_SUMMARY_INTERVAL);
+        return;
+    }
+
     if (newsStories.length === 0 && !currentStory) {
-        newsSource.textContent = 'News sources';
-        newsHeadline.removeAttribute('href');
-        newsHeadline.textContent = 'Headlines could not be loaded. Check your connection and try again later.';
-        newsPosted.hidden = true;
+        showNewsStatus('Headlines could not be loaded. Check your connection and try again later.');
         return;
     }
 
@@ -760,4 +762,3 @@ async function refreshNewsFeeds() {
 }
 
 refreshNewsFeeds();
-setInterval(refreshNewsFeeds, RSS_REFRESH_INTERVAL);
