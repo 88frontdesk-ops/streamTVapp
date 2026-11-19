@@ -4,6 +4,7 @@ const LOAD_DELAY = 1500;
 const PRESET_STORAGE_PREFIX = 'tv-preset-';
 const ACTIVE_PRESET_STORAGE_KEY = 'tv-active-preset';
 const EMPTY_PRESET_VALUE = '__empty__';
+const DEFAULTS_MIGRATION_KEY = 'tv-preset-3-defaults-migration';
 const REMOVED_PRESET_URLS = new Set([
     'https://www.youtube.com/watch?v=gCNeDWCI0vo',
     'https://www.youtube.com/watch?v=h3MuIUNCCzI',
@@ -20,6 +21,16 @@ const REMOVED_PRESET_URLS = new Set([
 ]);
 
 const presetSelect = document.querySelector('#preset-select');
+if (localStorage.getItem(DEFAULTS_MIGRATION_KEY) !== 'v1') {
+    window.DEFAULT_PRESETS[2].forEach((url, index) => {
+        const key = `${PRESET_STORAGE_PREFIX}2-${index}`;
+        if (url && localStorage.getItem(key) === EMPTY_PRESET_VALUE) {
+            localStorage.removeItem(key);
+        }
+    });
+    localStorage.setItem(DEFAULTS_MIGRATION_KEY, 'v1');
+}
+
 const storedPresetIndex = Number(localStorage.getItem(ACTIVE_PRESET_STORAGE_KEY));
 let activePresetIndex = Number.isInteger(storedPresetIndex) &&
     storedPresetIndex >= 0 &&

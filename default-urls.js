@@ -10,7 +10,7 @@ window.DEFAULT_URLS = [
 window.DEFAULT_PRESETS = [
     window.DEFAULT_URLS,
     [],
-    Array(12).fill(
+    [
         'https://balkanweb.com/tvplayer-2/?v=5',
         'https://www.twitch.tv/topmedia_topnews',
         'https://a2news.com/live.php',
@@ -23,5 +23,5 @@ window.DEFAULT_PRESETS = [
         'https://bloomberg.com/media-manifest/streams/us.m3u8',
         'https://hls.livecdn.io/cheddar.com/cheddar/playlist.m3u8',
         'https://vs-hls-push-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/pc_hd_abr_v2.m3u8'
-    )
+    ]
 ];
