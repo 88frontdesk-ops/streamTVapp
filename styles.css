@@ -71,16 +71,20 @@ body {
 
 .url-bar {
     display: flex;
-    gap: 6px;
+    align-items: center;
+    gap: 3px;
     flex: 0 0 auto;
     min-width: 0;
-    padding: 6px;
+    padding: 4px;
+    position: relative;
+    z-index: 2;
 }
 
 .url-bar input {
     flex: 1;
     min-width: 0;
-    padding: 6px 8px;
+    box-sizing: border-box;
+    padding: 6px;
     border-radius: 6px;
     border: none;
     background: rgba(255, 255, 255, 0.08);
@@ -88,14 +92,70 @@ body {
     outline: none;
 }
 
+.url-actions {
+    display: flex;
+    gap: 2px;
+    flex: 0 0 auto;
+}
+
 .url-bar button {
-    padding: 6px 10px;
+    padding: 5px 5px;
     border-radius: 6px;
     border: none;
     background: #1f8ef1;
     color: #fff;
     cursor: pointer;
-    flex: 0 0 auto;
+    white-space: nowrap;
+    font-size: 11px;
+}
+
+.url-bar .url-list-button {
+    width: 20px;
+    padding: 5px 0;
+    font-weight: bold;
+}
+
+.url-bar .load-button {
+    padding-right: 5px;
+    padding-left: 5px;
+}
+
+.url-bar button:disabled {
+    background: #555;
+    cursor: default;
+}
+
+.url-options {
+    position: absolute;
+    right: 4px;
+    bottom: 100%;
+    left: 4px;
+    z-index: 3;
+    max-height: min(40vh, 220px);
+    overflow-y: auto;
+    border: 1px solid #444;
+    border-radius: 6px;
+    background: #181818;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.7);
+}
+
+.url-options[hidden] {
+    display: none;
+}
+
+.url-bar .url-option {
+    display: block;
+    width: 100%;
+    padding: 7px 8px;
+    border-radius: 0;
+    background: #181818;
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+
+.url-bar .url-option:hover,
+.url-bar .url-option:focus {
+    background: #333;
 }
 
 .grid[data-channel-count="12"] {
@@ -116,5 +176,12 @@ body {
     .grid[data-channel-count="12"] {
         grid-template-columns: repeat(3, minmax(0, 1fr));
         grid-template-rows: repeat(4, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 600px) {
+    .grid[data-channel-count="12"] {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-rows: repeat(6, minmax(0, 1fr));
     }
 }

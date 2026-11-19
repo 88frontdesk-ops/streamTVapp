@@ -5,6 +5,9 @@ const PRESET_STORAGE_PREFIX = 'tv-preset-';
 const ACTIVE_PRESET_STORAGE_KEY = 'tv-active-preset';
 const EMPTY_PRESET_VALUE = '__empty__';
 const DEFAULTS_MIGRATION_KEY = 'tv-preset-3-defaults-migration';
+const URL_LIBRARY_STORAGE_KEY = 'tv-url-library';
+const URL_LIBRARY_REMOVED_KEY = 'tv-url-library-removed';
+const URL_LIBRARY_MIGRATION_KEY = 'tv-url-library-migration';
 const REMOVED_PRESET_URLS = new Set([
     'https://www.youtube.com/watch?v=gCNeDWCI0vo',
     'https://www.youtube.com/watch?v=h3MuIUNCCzI',
@@ -37,6 +40,7 @@ let activePresetIndex = Number.isInteger(storedPresetIndex) &&
     storedPresetIndex < window.DEFAULT_PRESETS.length
     ? storedPresetIndex
     : 0;
+const channelCount = Math.max(6, ...window.DEFAULT_PRESETS.map(preset => preset.length));
 
 function getPresetUrl(presetIndex, channelIndex) {
     const key = `${PRESET_STORAGE_PREFIX}${presetIndex}-${channelIndex}`;
@@ -59,6 +63,45 @@ function getPresetUrl(presetIndex, channelIndex) {
     }
 
     return window.DEFAULT_PRESETS[presetIndex][channelIndex] || '';
+}
+
+function readStoredUrlList(key) {
+    const stored = localStorage.getItem(key);
+    if (!stored) return [];
+    const urls = JSON.parse(stored);
+    if (!Array.isArray(urls) || !urls.every(url => typeof url === 'string')) {
+        throw new Error(`Stored URL list "${key}" is invalid.`);
+    }
+    return urls;
+}
+
+function getRemovedUrls() {
+    return new Set(readStoredUrlList(URL_LIBRARY_REMOVED_KEY));
+}
+
+function writeUrlLibrary(urls, removedUrls) {
+    localStorage.setItem(URL_LIBRARY_STORAGE_KEY, JSON.stringify([...new Set(urls)]));
+    localStorage.setItem(URL_LIBRARY_REMOVED_KEY, JSON.stringify([...removedUrls]));
+}
+
+function getUrlLibrary() {
+    const removedUrls = getRemovedUrls();
+    return [...new Set([
+        ...window.DEFAULT_PRESETS.flat().filter(Boolean),
+        ...readStoredUrlList(URL_LIBRARY_STORAGE_KEY)
+    ])].filter(url => !removedUrls.has(url));
+}
+
+if (localStorage.getItem(URL_LIBRARY_MIGRATION_KEY) !== 'v1') {
+    const existingUrls = readStoredUrlList(URL_LIBRARY_STORAGE_KEY);
+    window.DEFAULT_PRESETS.forEach((preset, presetIndex) => {
+        for (let index = 0; index < channelCount; index++) {
+            const url = getPresetUrl(presetIndex, index);
+            if (url) existingUrls.push(url);
+        }
+    });
+    writeUrlLibrary(existingUrls, getRemovedUrls());
+    localStorage.setItem(URL_LIBRARY_MIGRATION_KEY, 'v1');
 }
 
 presetSelect.value = String(activePresetIndex);
@@ -120,11 +163,133 @@ function createCard(card, index) {
     const input = document.createElement('input');
     input.type = 'text';
     input.value = getPresetUrl(activePresetIndex, index);
+    input.setAttribute('aria-label', `URL for channel ${index + 1}`);
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-controls', `url-options-${index}`);
+    input.setAttribute('aria-expanded', 'false');
 
-    const btn = document.createElement('button');
-    btn.textContent = 'Load';
+    let selectedUrl = '';
+    let urlOptionsOpen = false;
+    const urlOptions = document.createElement('div');
+    urlOptions.className = 'url-options';
+    urlOptions.id = `url-options-${index}`;
+    urlOptions.setAttribute('role', 'listbox');
+    urlOptions.hidden = true;
 
-    urlBar.append(input, btn);
+    const actions = document.createElement('div');
+    actions.className = 'url-actions';
+
+    const addButton = document.createElement('button');
+    addButton.className = 'url-list-button';
+    addButton.textContent = '+';
+    addButton.setAttribute('aria-label', 'Add URL to shared list');
+    addButton.title = 'Add this URL to the shared list, or update the selected URL everywhere';
+
+    const deleteButton = document.createElement('button');
+    deleteButton.className = 'url-list-button';
+    deleteButton.textContent = 'x';
+    deleteButton.setAttribute('aria-label', 'Remove URL from shared list');
+    deleteButton.title = 'Remove this URL from the shared list and all presets';
+    deleteButton.disabled = !getUrlLibrary().includes(input.value.trim());
+
+    const loadButton = document.createElement('button');
+    loadButton.className = 'load-button';
+    loadButton.textContent = 'Load';
+
+    function renderUrlOptions(filter = '') {
+        const normalizedFilter = filter.toLocaleLowerCase();
+        const urls = getUrlLibrary().filter(url =>
+            url.toLocaleLowerCase().includes(normalizedFilter)
+        );
+        urlOptions.replaceChildren();
+        urls.forEach(url => {
+            const option = document.createElement('button');
+            option.type = 'button';
+            option.className = 'url-option';
+            option.setAttribute('role', 'option');
+            option.textContent = url;
+            option.addEventListener('pointerdown', event => event.preventDefault());
+            option.addEventListener('click', () => {
+                input.value = url;
+                selectedUrl = url;
+                deleteButton.disabled = false;
+                urlOptionsOpen = false;
+                urlOptions.hidden = true;
+                input.setAttribute('aria-expanded', 'false');
+                input.focus();
+            });
+            option.addEventListener('keydown', event => {
+                const options = [...urlOptions.querySelectorAll('.url-option')];
+                const optionIndex = options.indexOf(option);
+                if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    options[optionIndex + 1]?.focus();
+                } else if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    if (optionIndex === 0) input.focus();
+                    else options[optionIndex - 1]?.focus();
+                } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    urlOptionsOpen = false;
+                    urlOptions.hidden = true;
+                    input.setAttribute('aria-expanded', 'false');
+                    input.focus();
+                }
+            });
+            urlOptions.append(option);
+        });
+        urlOptions.hidden = !urlOptionsOpen || urls.length === 0;
+        input.setAttribute('aria-expanded', String(!urlOptions.hidden));
+    }
+
+    function closeUrlOptions() {
+        urlOptionsOpen = false;
+        urlOptions.hidden = true;
+        input.setAttribute('aria-expanded', 'false');
+    }
+
+    urlBar.append(urlOptions);
+
+    input.addEventListener('input', () => {
+        const value = input.value.trim();
+        if (getUrlLibrary().includes(value)) selectedUrl = value;
+        else if (!value) selectedUrl = '';
+        deleteButton.disabled = !getUrlLibrary().includes(value);
+        urlOptionsOpen = true;
+        renderUrlOptions(value);
+    });
+    input.addEventListener('focus', () => {
+        urlOptionsOpen = true;
+        renderUrlOptions();
+    });
+    input.addEventListener('click', () => {
+        urlOptionsOpen = true;
+        renderUrlOptions();
+    });
+    input.addEventListener('blur', () => {
+        setTimeout(() => {
+            if (document.activeElement === input || urlOptions.contains(document.activeElement)) return;
+            closeUrlOptions();
+        }, 0);
+    });
+    input.addEventListener('keydown', event => {
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            if (!urlOptionsOpen) {
+                urlOptionsOpen = true;
+                renderUrlOptions();
+            }
+            urlOptions.querySelector('.url-option')?.focus();
+        } else if (event.key === 'Escape' && urlOptionsOpen) {
+            event.preventDefault();
+            closeUrlOptions();
+        }
+    });
+
+    actions.append(addButton, deleteButton, loadButton);
+    urlBar.insertBefore(input, urlOptions);
+    urlBar.append(actions);
 
     const wrapper = document.createElement('div');
     wrapper.className = 'scaled-wrapper';
@@ -162,17 +327,125 @@ function createCard(card, index) {
         requestAnimationFrame(() => updateScale(card));
     }
 
-    btn.onclick = () => load(input.value.trim());
+    loadButton.onclick = () => load(input.value.trim());
     input.addEventListener('keydown', e => {
         if (e.key === 'Enter') load(input.value.trim());
     });
 
-    return { card, input, load, unload };
+    addButton.onclick = () => addUrlToLibrary(controller);
+    deleteButton.onclick = () => deleteUrlFromLibrary(controller);
+
+    const controller = {
+        card,
+        input,
+        addButton,
+        deleteButton,
+        renderUrlOptions,
+        closeUrlOptions,
+        load,
+        unload,
+        get selectedUrl() { return selectedUrl; },
+        set selectedUrl(value) { selectedUrl = value; }
+    };
+    return controller;
+}
+
+function refreshUrlLibrary() {
+    controllers.forEach(controller => {
+        controller.deleteButton.disabled =
+            !getUrlLibrary().includes(controller.input.value.trim());
+        controller.renderUrlOptions(controller.input.value.trim());
+    });
+}
+
+function addUrlToLibrary(controller) {
+    const value = controller.input.value.trim();
+    if (!value) return;
+
+    if (controller.selectedUrl && controller.selectedUrl !== value) {
+        updateUrlInLibrary(controller);
+        return;
+    }
+
+    const urls = readStoredUrlList(URL_LIBRARY_STORAGE_KEY);
+    const removedUrls = getRemovedUrls();
+    removedUrls.delete(value);
+    urls.push(value);
+    writeUrlLibrary(urls, removedUrls);
+
+    controller.selectedUrl = value;
+    refreshUrlLibrary();
+}
+
+function updateUrlInLibrary(controller) {
+    const value = controller.input.value.trim();
+    const originalUrl = controller.selectedUrl;
+    if (!originalUrl || !value || originalUrl === value) return;
+
+    const urls = readStoredUrlList(URL_LIBRARY_STORAGE_KEY);
+    const removedUrls = getRemovedUrls();
+    const updatedChannels = new Set();
+
+    for (let presetIndex = 0; presetIndex < window.DEFAULT_PRESETS.length; presetIndex++) {
+        for (let index = 0; index < channelCount; index++) {
+            if (getPresetUrl(presetIndex, index) === originalUrl) {
+                localStorage.setItem(`${PRESET_STORAGE_PREFIX}${presetIndex}-${index}`, value);
+                if (presetIndex === activePresetIndex) updatedChannels.add(index);
+            }
+        }
+    }
+
+    removedUrls.add(originalUrl);
+    removedUrls.delete(value);
+    const updatedUrls = urls.map(url => url === originalUrl ? value : url);
+    updatedUrls.push(value);
+    writeUrlLibrary(updatedUrls, removedUrls);
+
+    controllers.forEach((current, index) => {
+        if (current.input.value.trim() === originalUrl || updatedChannels.has(index)) {
+            current.input.value = value;
+            if (!current.card.hidden) current.load(value);
+        }
+        if (current.selectedUrl === originalUrl) current.selectedUrl = value;
+    });
+
+    controller.input.value = value;
+    controller.selectedUrl = value;
+    refreshUrlLibrary();
+}
+
+function deleteUrlFromLibrary(controller) {
+    const url = controller.input.value.trim();
+    if (!url || !getUrlLibrary().includes(url)) return;
+
+    for (let presetIndex = 0; presetIndex < window.DEFAULT_PRESETS.length; presetIndex++) {
+        for (let index = 0; index < channelCount; index++) {
+            if (getPresetUrl(presetIndex, index) === url) {
+                localStorage.setItem(
+                    `${PRESET_STORAGE_PREFIX}${presetIndex}-${index}`,
+                    EMPTY_PRESET_VALUE
+                );
+            }
+        }
+    }
+
+    const urls = readStoredUrlList(URL_LIBRARY_STORAGE_KEY).filter(savedUrl => savedUrl !== url);
+    const removedUrls = getRemovedUrls();
+    removedUrls.add(url);
+    writeUrlLibrary(urls, removedUrls);
+
+    controllers.forEach(current => {
+        if (current.input.value.trim() === url) {
+            current.input.value = '';
+            current.unload();
+        }
+        if (current.selectedUrl === url) current.selectedUrl = '';
+    });
+    refreshUrlLibrary();
 }
 
 // ----- Initialize cards -----
 const grid = document.querySelector('.grid');
-const channelCount = Math.max(6, ...window.DEFAULT_PRESETS.map(preset => preset.length));
 const controllers = [];
 for (let i = 0; i < channelCount; i++) {
     const card = document.createElement('div');
@@ -180,6 +453,8 @@ for (let i = 0; i < channelCount; i++) {
     grid.append(card);
     controllers.push(createCard(card, i));
 }
+
+refreshUrlLibrary();
 
 const cards = grid.querySelectorAll('.tv');
 
@@ -233,8 +508,11 @@ presetSelect.addEventListener('change', () => {
 
     controllers.forEach((controller, index) => {
         controller.input.value = getPresetUrl(activePresetIndex, index);
+        controller.selectedUrl = '';
+        controller.closeUrlOptions();
         controller.unload();
     });
+    refreshUrlLibrary();
     loadSequentially();
 });
 
