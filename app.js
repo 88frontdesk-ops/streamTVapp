@@ -123,7 +123,7 @@ function createCard(card, index) {
 
     card.append(wrapper);
     if (mode === 'desktop') {
-        card.append(urlBar); // show URL bars only on desktop
+        card.append(urlBar);
     }
 
     function unload() { viewport.innerHTML = ''; }
@@ -160,11 +160,27 @@ function createCard(card, index) {
 }
 
 // ----- Initialize cards -----
-const cards = document.querySelectorAll('.tv');
+const grid = document.querySelector('.grid');
+const channelCount = Math.max(6, ...window.DEFAULT_PRESETS.map(preset => preset.length));
 const controllers = [];
-cards.forEach((card, i) => {
+for (let i = 0; i < channelCount; i++) {
+    const card = document.createElement('div');
+    card.className = 'tv';
+    grid.append(card);
     controllers.push(createCard(card, i));
-});
+}
+
+const cards = grid.querySelectorAll('.tv');
+
+function updateGridLayout() {
+    const visibleChannelCount = Math.max(6, window.DEFAULT_PRESETS[activePresetIndex].length);
+    grid.dataset.channelCount = String(visibleChannelCount);
+    controllers.forEach((controller, index) => {
+        controller.card.hidden = index >= visibleChannelCount;
+    });
+}
+
+updateGridLayout();
 
 function saveCurrentPreset() {
     controllers.forEach((controller, index) => {
@@ -202,6 +218,7 @@ presetSelect.addEventListener('change', () => {
     saveCurrentPreset();
     activePresetIndex = nextPresetIndex;
     localStorage.setItem(ACTIVE_PRESET_STORAGE_KEY, String(activePresetIndex));
+    updateGridLayout();
 
     controllers.forEach((controller, index) => {
         controller.input.value = getPresetUrl(activePresetIndex, index);
