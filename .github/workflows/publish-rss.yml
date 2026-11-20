@@ -55,6 +55,13 @@ jobs:
         with:
           path: _site
 
+      - name: Allow Pages artifact to propagate
+        run: sleep 10
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          timeout: 600000
+          error_count: 20
+          reporting_interval: 5000
