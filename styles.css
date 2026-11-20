@@ -115,11 +115,25 @@ body {
     text-decoration: underline;
 }
 
-.news-posted {
+.news-times {
     flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+    max-width: 150px;
+}
+
+.news-posted,
+.news-updated {
     color: #aab4bf;
     font-size: 11px;
-    white-space: nowrap;
+    line-height: 1.2;
+    text-align: right;
+}
+
+.news-updated {
+    font-size: 10px;
 }
 
 @keyframes live-pulse {

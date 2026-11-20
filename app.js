@@ -4,7 +4,7 @@ const LOAD_DELAY = 1500;
 const RSS_EMPTY_FEED_RETENTION = 60 * 60 * 1000;
 const NEWS_STORY_INTERVAL = 6 * 1000;
 const NEWS_REFRESH_SUMMARY_INTERVAL = 2 * 1000;
-const RSS_FETCH_TIMEOUT = 15 * 1000;
+const RSS_SNAPSHOT_RETRY_INTERVAL = 60 * 1000;
 const PRESET_STORAGE_PREFIX = 'tv-preset-';
 const ACTIVE_PRESET_STORAGE_KEY = 'tv-active-preset';
 const EMPTY_PRESET_VALUE = '__empty__';
@@ -537,6 +537,7 @@ const newsSource = document.querySelector('.news-source');
 const newsHeadline = document.querySelector('.news-headline');
 const newsSummary = document.querySelector('.news-summary');
 const newsPosted = document.querySelector('.news-posted');
+const newsUpdated = document.querySelector('.news-updated');
 const feedStories = new Map();
 const emptyFeedSince = new Map();
 let newsStories = [];
@@ -544,64 +545,33 @@ let currentStoryIndex = -1;
 let currentStory = null;
 let newsStoryTimer;
 
-function getFeedItemLink(item) {
-    const atomLink = item.querySelector('link[rel="alternate"], link:not([rel])');
-    const rawLink = atomLink?.getAttribute('href') || item.querySelector('link')?.textContent.trim();
-    if (!rawLink) return '';
-    try {
-        const url = new URL(rawLink);
-        return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
-    } catch {
-        return '';
-    }
+function formatLocalDateTime(timestamp) {
+    const date = new Date(timestamp);
+    if (!Number.isFinite(date.getTime())) return '';
+    return new Intl.DateTimeFormat(undefined, {
+        dateStyle: 'medium',
+        timeStyle: 'short'
+    }).format(date);
 }
 
-function cleanFeedSummary(rawSummary) {
-    if (!rawSummary) return '';
-    const text = new DOMParser()
-        .parseFromString(rawSummary, 'text/html')
-        .body.textContent.replace(/\s+/g, ' ')
-        .trim();
-    return text.length > 320 ? `${text.slice(0, 317).trimEnd()}…` : text;
-}
-
-function parseFeed(xmlText, feed) {
-    const xml = new DOMParser().parseFromString(xmlText, 'application/xml');
-    if (xml.querySelector('parsererror')) {
-        throw new Error('The feed returned invalid XML.');
-    }
-
-    return [...xml.querySelectorAll('item, entry')]
-        .map(item => {
-            const title = item.querySelector('title')?.textContent.trim();
-            const link = getFeedItemLink(item);
-            const summaryNode = item.querySelector('description, summary, content') ||
-                item.getElementsByTagNameNS('*', 'encoded')[0];
-            const published = item.querySelector('pubDate, published, updated, date')?.textContent.trim();
-            const publishedAt = published ? Date.parse(published) : 0;
-            return {
-                title,
-                link,
-                summary: cleanFeedSummary(summaryNode?.textContent),
-                published: Number.isFinite(publishedAt) ? publishedAt : 0,
-                source: feed.name,
-                category: feed.category
-            };
-        })
-        .filter(story => story.title && story.link)
-        .sort((a, b) => b.published - a.published)
-        .slice(0, 4);
-}
-
-async function fetchFeed(feed) {
+async function fetchFeedSnapshot() {
     const abortController = new AbortController();
-    const timeout = setTimeout(() => abortController.abort(), RSS_FETCH_TIMEOUT);
+    const timeout = setTimeout(() => abortController.abort(), 15 * 1000);
     try {
-        const response = await fetch(feed.url, { signal: abortController.signal });
+        const snapshotUrl = new URL('feeds.json', document.baseURI);
+        snapshotUrl.searchParams.set('updated', String(Date.now()));
+        const response = await fetch(snapshotUrl, {
+            signal: abortController.signal,
+            cache: 'no-store'
+        });
         if (!response.ok) {
-            throw new Error(`Feed request failed with status ${response.status}.`);
+            throw new Error(`Feed snapshot request failed with status ${response.status}.`);
         }
-        return { feed, stories: parseFeed(await response.text(), feed) };
+        const snapshot = await response.json();
+        if (!snapshot || !Array.isArray(snapshot.feeds)) {
+            throw new Error('The feed snapshot has an invalid format.');
+        }
+        return snapshot;
     } finally {
         clearTimeout(timeout);
     }
@@ -618,10 +588,7 @@ function renderNewsStory(story) {
     if (story.published > 0) {
         const publishedDate = new Date(story.published);
         newsPosted.dateTime = publishedDate.toISOString();
-        newsPosted.textContent = `Posted ${new Intl.DateTimeFormat(undefined, {
-            dateStyle: 'medium',
-            timeStyle: 'short'
-        }).format(publishedDate)}`;
+        newsPosted.textContent = `Posted ${formatLocalDateTime(publishedDate)}`;
         newsPosted.setAttribute('aria-label', newsPosted.textContent);
         newsPosted.hidden = false;
     } else {
@@ -629,6 +596,18 @@ function renderNewsStory(story) {
         newsPosted.removeAttribute('datetime');
         newsPosted.removeAttribute('aria-label');
         newsPosted.hidden = true;
+    }
+    if (story.fetchedAt > 0) {
+        const fetchedDate = new Date(story.fetchedAt);
+        newsUpdated.dateTime = fetchedDate.toISOString();
+        newsUpdated.textContent = `Fetched ${formatLocalDateTime(fetchedDate)}`;
+        newsUpdated.setAttribute('aria-label', `Feed ${newsUpdated.textContent}`);
+        newsUpdated.hidden = false;
+    } else {
+        newsUpdated.textContent = '';
+        newsUpdated.removeAttribute('datetime');
+        newsUpdated.removeAttribute('aria-label');
+        newsUpdated.hidden = true;
     }
     const storyElement = newsHeadline.parentElement;
     storyElement.classList.remove('headline-enter');
@@ -650,6 +629,10 @@ function showNewsStatus(message) {
     newsPosted.removeAttribute('datetime');
     newsPosted.removeAttribute('aria-label');
     newsPosted.hidden = true;
+    newsUpdated.textContent = '';
+    newsUpdated.removeAttribute('datetime');
+    newsUpdated.removeAttribute('aria-label');
+    newsUpdated.hidden = true;
 
     const storyElement = newsHeadline.parentElement;
     storyElement.classList.remove('headline-enter');
@@ -717,32 +700,78 @@ function updateFeedStories(url, fetchedStories, refreshedAt) {
 }
 
 async function refreshNewsFeeds(showSummary = false) {
-    const results = await Promise.all(window.DEFAULT_RSS_FEEDS.map(async feed => {
-        try {
-            return await fetchFeed(feed);
-        } catch (error) {
-            console.warn(`Unable to refresh RSS feed "${feed.name}".`, error);
-            return { feed, error };
-        }
-    }));
+    let snapshot;
+    try {
+        snapshot = await fetchFeedSnapshot();
+    } catch (error) {
+        console.error('Unable to load the RSS feed snapshot.', error);
+        showNewsStatus(newsStories.length > 0
+            ? 'Feed refresh unavailable; retrying shortly.'
+            : 'Headlines could not be loaded. Check your connection and try again shortly.');
+        newsStoryTimer = setTimeout(() => {
+            if (newsStories.length > 0) {
+                currentStory = null;
+                currentStoryIndex = -1;
+                showNextNewsStory();
+            } else {
+                refreshNewsFeeds();
+            }
+        }, showSummary ? NEWS_REFRESH_SUMMARY_INTERVAL : RSS_SNAPSHOT_RETRY_INTERVAL);
+        return;
+    }
 
     const refreshedAt = Date.now();
     const newPostUrls = new Set();
-    results.forEach(result => {
-        if (!result.stories) return;
-        const existingLinks = new Set(
-            (feedStories.get(result.feed.url) || []).map(story => story.link)
-        );
-        if (result.stories.some(story => !existingLinks.has(story.link))) {
-            newPostUrls.add(result.feed.url);
+    const refreshedUrls = new Set();
+    const resultsByUrl = new Map(snapshot.feeds
+        .filter(result => result && typeof result.url === 'string')
+        .map(result => [result.url, result]));
+    window.DEFAULT_RSS_FEEDS.forEach(feed => {
+        const result = resultsByUrl.get(feed.url);
+        if (!result) {
+            console.warn(`Feed snapshot is missing "${feed.name}".`);
+            return;
         }
-        updateFeedStories(result.feed.url, result.stories, refreshedAt);
+        if (result.error) {
+            console.warn(`Unable to refresh RSS feed "${feed.name}": ${result.error}`);
+            return;
+        }
+        if (!Array.isArray(result.stories)) {
+            console.warn(`RSS feed snapshot for "${feed.name}" has no stories list.`);
+            return;
+        }
+
+        const fetchedStories = result.stories.filter(story =>
+            story &&
+            typeof story.title === 'string' &&
+            typeof story.link === 'string' &&
+            /^https?:\/\//i.test(story.link)
+        ).map(story => ({
+            title: story.title,
+            link: story.link,
+            summary: typeof story.summary === 'string' ? story.summary : '',
+            published: Number.isFinite(story.published) ? story.published : 0,
+            fetchedAt: Date.parse(result.fetchedAt || snapshot.generatedAt) || 0,
+            source: feed.name,
+            category: feed.category
+        }));
+        refreshedUrls.add(feed.url);
+        const existingLinks = new Set(
+            (feedStories.get(feed.url) || []).map(story => story.link)
+        );
+        if (fetchedStories.some(story => !existingLinks.has(story.link))) {
+            newPostUrls.add(feed.url);
+        }
+        updateFeedStories(feed.url, fetchedStories, refreshedAt);
     });
     rebuildNewsStories();
 
     if (showSummary) {
         const count = newPostUrls.size;
-        showNewsStatus(`${count} feed URL${count === 1 ? '' : 's'} returned new posts.`);
+        showNewsStatus(
+            `${count} feed URL${count === 1 ? '' : 's'} returned new posts; ` +
+            `${refreshedUrls.size} of ${window.DEFAULT_RSS_FEEDS.length} feeds refreshed.`
+        );
         newsStoryTimer = setTimeout(() => {
             if (newsStories.length > 0) {
                 showNextNewsStory();
@@ -755,6 +784,7 @@ async function refreshNewsFeeds(showSummary = false) {
 
     if (newsStories.length === 0 && !currentStory) {
         showNewsStatus('Headlines could not be loaded. Check your connection and try again later.');
+        newsStoryTimer = setTimeout(() => refreshNewsFeeds(), RSS_SNAPSHOT_RETRY_INTERVAL);
         return;
     }
 
