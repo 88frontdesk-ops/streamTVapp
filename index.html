@@ -31,13 +31,15 @@
                 <span>LIVE NEWS</span>
             </div>
             <div class="news-story" aria-live="polite">
-                <span class="news-source">Loading headlines</span>
+                <div class="news-meta">
+                    <span class="news-source">Loading headlines</span>
+                    <div class="news-times">
+                        <time class="news-posted" hidden></time>
+                        <time class="news-snapshot-updated" hidden></time>
+                    </div>
+                </div>
                 <a class="news-headline" tabindex="-1">Fetching the latest stories…</a>
                 <p class="news-summary" hidden></p>
-            </div>
-            <div class="news-times">
-                <time class="news-posted" hidden></time>
-                <time class="news-snapshot-updated" hidden></time>
             </div>
         </section>
     </div>
