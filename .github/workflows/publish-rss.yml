@@ -20,7 +20,7 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -65,3 +65,29 @@ jobs:
           timeout: 600000
           error_count: 20
           reporting_interval: 5000
+
+      - name: Verify published RSS snapshot
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          set -euo pipefail
+
+          expected_generated_at="$(python -c 'import json; print(json.load(open("_site/feeds.json", encoding="utf-8"))["generatedAt"])')"
+          base_url="${PAGE_URL%/}"
+
+          for attempt in $(seq 1 12); do
+            response="$(curl --fail --silent --show-error \
+              "${base_url}/feeds.json?verify=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${attempt}" || true)"
+            actual_generated_at="$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin).get("generatedAt", ""))' 2>/dev/null || true)"
+
+            if [[ "$actual_generated_at" == "$expected_generated_at" ]]; then
+              echo "Verified deployed RSS snapshot: $actual_generated_at"
+              exit 0
+            fi
+
+            echo "Attempt $attempt: waiting for GitHub Pages to serve the new snapshot (expected $expected_generated_at, got ${actual_generated_at:-no response})."
+            sleep 5
+          done
+
+          echo "::error::The deployed feeds.json did not match the generated RSS snapshot."
+          exit 1
