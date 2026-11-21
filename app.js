@@ -554,10 +554,15 @@ let lastSnapshotFetchStartedAt = 0;
 function formatLocalDateTime(timestamp) {
     const date = new Date(timestamp);
     if (!Number.isFinite(date.getTime())) return '';
-    return new Intl.DateTimeFormat(undefined, {
-        dateStyle: 'medium',
-        timeStyle: 'short'
+    const dateText = new Intl.DateTimeFormat(undefined, {
+        dateStyle: 'medium'
     }).format(date);
+    const timeText = new Intl.DateTimeFormat(undefined, {
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23'
+    }).format(date);
+    return `${dateText}, ${timeText}`;
 }
 
 function updateSnapshotUpdatedTime(snapshot) {
