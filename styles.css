@@ -121,19 +121,20 @@ body {
     flex-direction: column;
     align-items: flex-end;
     gap: 3px;
-    max-width: 150px;
+    width: clamp(96px, 9vw, 128px);
+    max-width: 128px;
 }
 
 .news-posted,
 .news-snapshot-updated {
-    color: #aab4bf;
-    font-size: 11px;
+    color: #62c7ff;
+    font-size: 10px;
     line-height: 1.2;
     text-align: right;
 }
 
 .news-snapshot-updated {
-    font-size: 10px;
+    font-size: 9px;
 }
 
 @keyframes live-pulse {
@@ -322,20 +323,47 @@ body {
     }
 
     .news-ticker {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr) auto;
         gap: 9px;
         height: auto;
         min-height: 84px;
     }
 
     .news-brand {
+        grid-column: 1;
+        grid-row: 1;
         font-size: 10px;
         letter-spacing: 0.5px;
     }
 
     .news-story {
+        grid-column: 2;
+        grid-row: 1;
         align-items: flex-start;
         flex-direction: column;
         gap: 3px;
+    }
+
+    .news-times {
+        grid-column: 2;
+        grid-row: 2;
+        width: 100%;
+        max-width: none;
+        flex-direction: row;
+        align-items: flex-start;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        gap: 2px 8px;
+        min-width: 0;
+    }
+
+    .news-posted,
+    .news-snapshot-updated {
+        min-width: 0;
+        text-align: left;
+        white-space: nowrap;
     }
 
     .news-source {
