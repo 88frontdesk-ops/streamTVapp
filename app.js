@@ -539,7 +539,6 @@ const newsSource = document.querySelector('.news-source');
 const newsHeadline = document.querySelector('.news-headline');
 const newsSummary = document.querySelector('.news-summary');
 const newsPosted = document.querySelector('.news-posted');
-const newsUpdated = document.querySelector('.news-updated');
 const newsSnapshotUpdated = document.querySelector('.news-snapshot-updated');
 const feedStories = new Map();
 const emptyFeedSince = new Map();
@@ -615,18 +614,6 @@ function renderNewsStory(story) {
         newsPosted.removeAttribute('aria-label');
         newsPosted.hidden = true;
     }
-    if (story.fetchedAt > 0) {
-        const fetchedDate = new Date(story.fetchedAt);
-        newsUpdated.dateTime = fetchedDate.toISOString();
-        newsUpdated.textContent = `Fetched ${formatLocalDateTime(fetchedDate)}`;
-        newsUpdated.setAttribute('aria-label', `Feed ${newsUpdated.textContent}`);
-        newsUpdated.hidden = false;
-    } else {
-        newsUpdated.textContent = '';
-        newsUpdated.removeAttribute('datetime');
-        newsUpdated.removeAttribute('aria-label');
-        newsUpdated.hidden = true;
-    }
     const storyElement = newsHeadline.parentElement;
     storyElement.classList.remove('headline-enter');
     void storyElement.offsetWidth;
@@ -647,10 +634,6 @@ function showNewsStatus(message) {
     newsPosted.removeAttribute('datetime');
     newsPosted.removeAttribute('aria-label');
     newsPosted.hidden = true;
-    newsUpdated.textContent = '';
-    newsUpdated.removeAttribute('datetime');
-    newsUpdated.removeAttribute('aria-label');
-    newsUpdated.hidden = true;
 
     const storyElement = newsHeadline.parentElement;
     storyElement.classList.remove('headline-enter');
@@ -780,7 +763,6 @@ async function refreshNewsFeeds(showSummary = false) {
                 link: story.link,
                 summary: typeof story.summary === 'string' ? story.summary : '',
                 published: Number.isFinite(story.published) ? story.published : 0,
-                fetchedAt: Date.parse(result.fetchedAt || snapshot.generatedAt) || 0,
                 source: feed.name,
                 category: feed.category
             }));
