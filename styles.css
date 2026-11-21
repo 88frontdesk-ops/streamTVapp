@@ -125,7 +125,6 @@ body {
 }
 
 .news-posted,
-.news-updated,
 .news-snapshot-updated {
     color: #aab4bf;
     font-size: 11px;
@@ -133,7 +132,6 @@ body {
     text-align: right;
 }
 
-.news-updated,
 .news-snapshot-updated {
     font-size: 10px;
 }
