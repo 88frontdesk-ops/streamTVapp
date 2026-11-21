@@ -53,6 +53,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
+          name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
           path: _site
 
       - name: Allow Pages artifact to propagate
@@ -62,6 +63,7 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
         with:
+          artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
           timeout: 600000
           error_count: 20
           reporting_interval: 5000
