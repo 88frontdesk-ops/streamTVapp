@@ -125,14 +125,16 @@ body {
 }
 
 .news-posted,
-.news-updated {
+.news-updated,
+.news-snapshot-updated {
     color: #aab4bf;
     font-size: 11px;
     line-height: 1.2;
     text-align: right;
 }
 
-.news-updated {
+.news-updated,
+.news-snapshot-updated {
     font-size: 10px;
 }
 

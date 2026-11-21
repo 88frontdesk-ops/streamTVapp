@@ -5,6 +5,8 @@ const RSS_EMPTY_FEED_RETENTION = 60 * 60 * 1000;
 const NEWS_STORY_INTERVAL = 6 * 1000;
 const NEWS_REFRESH_SUMMARY_INTERVAL = 2 * 1000;
 const RSS_SNAPSHOT_RETRY_INTERVAL = 60 * 1000;
+const RSS_SNAPSHOT_POLL_INTERVAL = 5 * 60 * 1000;
+const RSS_SNAPSHOT_FOCUS_REFRESH_INTERVAL = 60 * 1000;
 const PRESET_STORAGE_PREFIX = 'tv-preset-';
 const ACTIVE_PRESET_STORAGE_KEY = 'tv-active-preset';
 const EMPTY_PRESET_VALUE = '__empty__';
@@ -538,12 +540,17 @@ const newsHeadline = document.querySelector('.news-headline');
 const newsSummary = document.querySelector('.news-summary');
 const newsPosted = document.querySelector('.news-posted');
 const newsUpdated = document.querySelector('.news-updated');
+const newsSnapshotUpdated = document.querySelector('.news-snapshot-updated');
 const feedStories = new Map();
 const emptyFeedSince = new Map();
 let newsStories = [];
 let currentStoryIndex = -1;
 let currentStory = null;
 let newsStoryTimer;
+let newsRefreshInProgress = false;
+let newsRefreshQueued = false;
+let newsRefreshQueuedWithSummary = false;
+let lastSnapshotFetchStartedAt = 0;
 
 function formatLocalDateTime(timestamp) {
     const date = new Date(timestamp);
@@ -552,6 +559,17 @@ function formatLocalDateTime(timestamp) {
         dateStyle: 'medium',
         timeStyle: 'short'
     }).format(date);
+}
+
+function updateSnapshotUpdatedTime(snapshot) {
+    const generatedAt = Date.parse(snapshot?.generatedAt || '');
+    if (!Number.isFinite(generatedAt)) return;
+
+    const generatedDate = new Date(generatedAt);
+    newsSnapshotUpdated.dateTime = generatedDate.toISOString();
+    newsSnapshotUpdated.textContent = `Snapshot ${formatLocalDateTime(generatedDate)}`;
+    newsSnapshotUpdated.setAttribute('aria-label', `RSS snapshot ${formatLocalDateTime(generatedDate)}`);
+    newsSnapshotUpdated.hidden = false;
 }
 
 async function fetchFeedSnapshot() {
@@ -700,95 +718,128 @@ function updateFeedStories(url, fetchedStories, refreshedAt) {
 }
 
 async function refreshNewsFeeds(showSummary = false) {
-    let snapshot;
-    try {
-        snapshot = await fetchFeedSnapshot();
-    } catch (error) {
-        console.error('Unable to load the RSS feed snapshot.', error);
-        showNewsStatus(newsStories.length > 0
-            ? 'Feed refresh unavailable; retrying shortly.'
-            : 'Headlines could not be loaded. Check your connection and try again shortly.');
-        newsStoryTimer = setTimeout(() => {
-            if (newsStories.length > 0) {
-                currentStory = null;
-                currentStoryIndex = -1;
-                showNextNewsStory();
-            } else {
-                refreshNewsFeeds();
-            }
-        }, showSummary ? NEWS_REFRESH_SUMMARY_INTERVAL : RSS_SNAPSHOT_RETRY_INTERVAL);
+    if (newsRefreshInProgress) {
+        newsRefreshQueued = true;
+        newsRefreshQueuedWithSummary = newsRefreshQueuedWithSummary || showSummary;
         return;
     }
 
-    const refreshedAt = Date.now();
-    const newPostUrls = new Set();
-    const refreshedUrls = new Set();
-    const resultsByUrl = new Map(snapshot.feeds
-        .filter(result => result && typeof result.url === 'string')
-        .map(result => [result.url, result]));
-    window.DEFAULT_RSS_FEEDS.forEach(feed => {
-        const result = resultsByUrl.get(feed.url);
-        if (!result) {
-            console.warn(`Feed snapshot is missing "${feed.name}".`);
-            return;
-        }
-        if (result.error) {
-            console.warn(`Unable to refresh RSS feed "${feed.name}": ${result.error}`);
-            return;
-        }
-        if (!Array.isArray(result.stories)) {
-            console.warn(`RSS feed snapshot for "${feed.name}" has no stories list.`);
+    newsRefreshInProgress = true;
+    lastSnapshotFetchStartedAt = Date.now();
+
+    try {
+        let snapshot;
+        try {
+            snapshot = await fetchFeedSnapshot();
+        } catch (error) {
+            console.error('Unable to load the RSS feed snapshot.', error);
+            showNewsStatus(newsStories.length > 0
+                ? 'Feed refresh unavailable; retrying shortly.'
+                : 'Headlines could not be loaded. Check your connection and try again shortly.');
+            newsStoryTimer = setTimeout(() => {
+                if (newsStories.length > 0) {
+                    currentStory = null;
+                    currentStoryIndex = -1;
+                    showNextNewsStory();
+                } else {
+                    refreshNewsFeeds();
+                }
+            }, showSummary ? NEWS_REFRESH_SUMMARY_INTERVAL : RSS_SNAPSHOT_RETRY_INTERVAL);
             return;
         }
 
-        const fetchedStories = result.stories.filter(story =>
-            story &&
-            typeof story.title === 'string' &&
-            typeof story.link === 'string' &&
-            /^https?:\/\//i.test(story.link)
-        ).map(story => ({
-            title: story.title,
-            link: story.link,
-            summary: typeof story.summary === 'string' ? story.summary : '',
-            published: Number.isFinite(story.published) ? story.published : 0,
-            fetchedAt: Date.parse(result.fetchedAt || snapshot.generatedAt) || 0,
-            source: feed.name,
-            category: feed.category
-        }));
-        refreshedUrls.add(feed.url);
-        const existingLinks = new Set(
-            (feedStories.get(feed.url) || []).map(story => story.link)
-        );
-        if (fetchedStories.some(story => !existingLinks.has(story.link))) {
-            newPostUrls.add(feed.url);
-        }
-        updateFeedStories(feed.url, fetchedStories, refreshedAt);
-    });
-    rebuildNewsStories();
-
-    if (showSummary) {
-        const count = newPostUrls.size;
-        showNewsStatus(
-            `${count} feed URL${count === 1 ? '' : 's'} returned new posts; ` +
-            `${refreshedUrls.size} of ${window.DEFAULT_RSS_FEEDS.length} feeds refreshed.`
-        );
-        newsStoryTimer = setTimeout(() => {
-            if (newsStories.length > 0) {
-                showNextNewsStory();
+        updateSnapshotUpdatedTime(snapshot);
+        const refreshedAt = Date.now();
+        const newPostUrls = new Set();
+        const refreshedUrls = new Set();
+        const resultsByUrl = new Map(snapshot.feeds
+            .filter(result => result && typeof result.url === 'string')
+            .map(result => [result.url, result]));
+        window.DEFAULT_RSS_FEEDS.forEach(feed => {
+            const result = resultsByUrl.get(feed.url);
+            if (!result) {
+                console.warn(`Feed snapshot is missing "${feed.name}".`);
                 return;
             }
+            if (result.error) {
+                console.warn(`Unable to refresh RSS feed "${feed.name}": ${result.error}`);
+                return;
+            }
+            if (!Array.isArray(result.stories)) {
+                console.warn(`RSS feed snapshot for "${feed.name}" has no stories list.`);
+                return;
+            }
+
+            const fetchedStories = result.stories.filter(story =>
+                story &&
+                typeof story.title === 'string' &&
+                typeof story.link === 'string' &&
+                /^https?:\/\//i.test(story.link)
+            ).map(story => ({
+                title: story.title,
+                link: story.link,
+                summary: typeof story.summary === 'string' ? story.summary : '',
+                published: Number.isFinite(story.published) ? story.published : 0,
+                fetchedAt: Date.parse(result.fetchedAt || snapshot.generatedAt) || 0,
+                source: feed.name,
+                category: feed.category
+            }));
+            refreshedUrls.add(feed.url);
+            const existingLinks = new Set(
+                (feedStories.get(feed.url) || []).map(story => story.link)
+            );
+            if (fetchedStories.some(story => !existingLinks.has(story.link))) {
+                newPostUrls.add(feed.url);
+            }
+            updateFeedStories(feed.url, fetchedStories, refreshedAt);
+        });
+        rebuildNewsStories();
+
+        if (showSummary) {
+            const count = newPostUrls.size;
+            showNewsStatus(
+                `${count} feed URL${count === 1 ? '' : 's'} returned new posts; ` +
+                `${refreshedUrls.size} of ${window.DEFAULT_RSS_FEEDS.length} feeds refreshed.`
+            );
+            newsStoryTimer = setTimeout(() => {
+                if (newsStories.length > 0) {
+                    showNextNewsStory();
+                    return;
+                }
+                showNewsStatus('Headlines could not be loaded. Check your connection and try again later.');
+            }, NEWS_REFRESH_SUMMARY_INTERVAL);
+            return;
+        }
+
+        if (newsStories.length === 0 && !currentStory) {
             showNewsStatus('Headlines could not be loaded. Check your connection and try again later.');
-        }, NEWS_REFRESH_SUMMARY_INTERVAL);
-        return;
-    }
+            newsStoryTimer = setTimeout(() => refreshNewsFeeds(), RSS_SNAPSHOT_RETRY_INTERVAL);
+            return;
+        }
 
-    if (newsStories.length === 0 && !currentStory) {
-        showNewsStatus('Headlines could not be loaded. Check your connection and try again later.');
-        newsStoryTimer = setTimeout(() => refreshNewsFeeds(), RSS_SNAPSHOT_RETRY_INTERVAL);
-        return;
+        if (newsStories.length > 0 && !currentStory) showNextNewsStory();
+    } finally {
+        newsRefreshInProgress = false;
+        if (newsRefreshQueued) {
+            const queuedShowSummary = newsRefreshQueuedWithSummary;
+            newsRefreshQueued = false;
+            newsRefreshQueuedWithSummary = false;
+            setTimeout(() => refreshNewsFeeds(queuedShowSummary), 0);
+        }
     }
-
-    if (newsStories.length > 0 && !currentStory) showNextNewsStory();
 }
 
 refreshNewsFeeds();
+setInterval(() => {
+    if (!document.hidden) refreshNewsFeeds();
+}, RSS_SNAPSHOT_POLL_INTERVAL);
+
+function refreshSnapshotWhenVisible() {
+    if (!document.hidden &&
+        Date.now() - lastSnapshotFetchStartedAt >= RSS_SNAPSHOT_FOCUS_REFRESH_INTERVAL) {
+        refreshNewsFeeds();
+    }
+}
+
+document.addEventListener('visibilitychange', refreshSnapshotWhenVisible);
+window.addEventListener('focus', refreshSnapshotWhenVisible);
