@@ -44,7 +44,7 @@ jobs:
       - name: Fetch feeds and prepare site
         run: |
           mkdir -p _site
-          cp app.js default-urls.js index.html styles.css _site/
+          cp app.js default-urls.js firebase-config.js index.html styles.css _site/
           node -e 'global.window = {}; require("./default-urls.js"); process.stdout.write(JSON.stringify(window.DEFAULT_RSS_FEEDS));' |
             python scripts/update_rss_snapshot.py --output _site/feeds.json
 
