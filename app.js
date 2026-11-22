@@ -1,3 +1,59 @@
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+import {
+    addDoc,
+    collection,
+    deleteDoc,
+    doc,
+    getDoc,
+    getDocs,
+    getFirestore
+} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+
+const firebaseConfig = window.FIREBASE_CONFIG;
+let db = null;
+let auth = null;
+let linkRows = window.DEFAULT_LINKS.map((link, index) => ({
+    id: `default-${index}`,
+    ...link,
+    status: 'default'
+}));
+
+if (firebaseConfig?.apiKey &&
+    firebaseConfig.projectId &&
+    firebaseConfig.apiKey !== 'YOUR_FIREBASE_API_KEY' &&
+    firebaseConfig.projectId !== 'YOUR_FIREBASE_PROJECT_ID') {
+    try {
+        const firebaseApp = initializeApp(firebaseConfig);
+        db = getFirestore(firebaseApp);
+        auth = getAuth(firebaseApp);
+        const snapshot = await getDocs(collection(db, 'links'));
+        const linksByUrl = new Map(linkRows.map(link => [link.link, link]));
+        snapshot.forEach(linkDocument => {
+            const data = linkDocument.data();
+            if (typeof data.channel !== 'string' ||
+                typeof data.link !== 'string' ||
+                !['default', 'manual'].includes(data.status)) {
+                console.warn(`Ignoring invalid Firestore link document: ${linkDocument.id}`);
+                return;
+            }
+            if (!linksByUrl.has(data.link)) {
+                linksByUrl.set(data.link, {
+                    id: linkDocument.id,
+                    channel: data.channel,
+                    link: data.link,
+                    status: data.status
+                });
+            }
+        });
+        linkRows = [...linksByUrl.values()];
+    } catch (error) {
+        console.warn('Could not load Firestore links; using the built-in default links.', error);
+    }
+} else {
+    console.warn('Firebase is not configured; using the built-in default links.');
+}
+
 const BASE_W = 1280;
 const BASE_H = 720;
 const LOAD_DELAY = 1500;
@@ -11,9 +67,6 @@ const PRESET_STORAGE_PREFIX = 'tv-preset-';
 const ACTIVE_PRESET_STORAGE_KEY = 'tv-active-preset';
 const EMPTY_PRESET_VALUE = '__empty__';
 const DEFAULTS_MIGRATION_KEY = 'tv-preset-3-defaults-migration';
-const URL_LIBRARY_STORAGE_KEY = 'tv-url-library';
-const URL_LIBRARY_REMOVED_KEY = 'tv-url-library-removed';
-const URL_LIBRARY_MIGRATION_KEY = 'tv-url-library-migration';
 const REMOVED_PRESET_URLS = new Set([
     'https://www.youtube.com/watch?v=gCNeDWCI0vo',
     'https://www.youtube.com/watch?v=h3MuIUNCCzI',
@@ -33,7 +86,7 @@ const presetSelect = document.querySelector('#preset-select');
 if (localStorage.getItem(DEFAULTS_MIGRATION_KEY) !== 'v1') {
     window.DEFAULT_PRESETS[2].forEach((url, index) => {
         const key = `${PRESET_STORAGE_PREFIX}2-${index}`;
-        if (url && localStorage.getItem(key) === EMPTY_PRESET_VALUE) {
+        if (url.link && localStorage.getItem(key) === EMPTY_PRESET_VALUE) {
             localStorage.removeItem(key);
         }
     });
@@ -68,46 +121,15 @@ function getPresetUrl(presetIndex, channelIndex) {
         }
     }
 
-    return window.DEFAULT_PRESETS[presetIndex][channelIndex] || '';
-}
-
-function readStoredUrlList(key) {
-    const stored = localStorage.getItem(key);
-    if (!stored) return [];
-    const urls = JSON.parse(stored);
-    if (!Array.isArray(urls) || !urls.every(url => typeof url === 'string')) {
-        throw new Error(`Stored URL list "${key}" is invalid.`);
-    }
-    return urls;
-}
-
-function getRemovedUrls() {
-    return new Set(readStoredUrlList(URL_LIBRARY_REMOVED_KEY));
-}
-
-function writeUrlLibrary(urls, removedUrls) {
-    localStorage.setItem(URL_LIBRARY_STORAGE_KEY, JSON.stringify([...new Set(urls)]));
-    localStorage.setItem(URL_LIBRARY_REMOVED_KEY, JSON.stringify([...removedUrls]));
+    return window.DEFAULT_PRESETS[presetIndex][channelIndex]?.link || '';
 }
 
 function getUrlLibrary() {
-    const removedUrls = getRemovedUrls();
-    return [...new Set([
-        ...window.DEFAULT_PRESETS.flat().filter(Boolean),
-        ...readStoredUrlList(URL_LIBRARY_STORAGE_KEY)
-    ])].filter(url => !removedUrls.has(url));
+    return linkRows;
 }
 
-if (localStorage.getItem(URL_LIBRARY_MIGRATION_KEY) !== 'v1') {
-    const existingUrls = readStoredUrlList(URL_LIBRARY_STORAGE_KEY);
-    window.DEFAULT_PRESETS.forEach((preset, presetIndex) => {
-        for (let index = 0; index < channelCount; index++) {
-            const url = getPresetUrl(presetIndex, index);
-            if (url) existingUrls.push(url);
-        }
-    });
-    writeUrlLibrary(existingUrls, getRemovedUrls());
-    localStorage.setItem(URL_LIBRARY_MIGRATION_KEY, 'v1');
+function getLinkByUrl(url) {
+    return linkRows.find(link => link.link === url);
 }
 
 presetSelect.value = String(activePresetIndex);
@@ -176,6 +198,7 @@ function createCard(card, index) {
     input.setAttribute('aria-expanded', 'false');
 
     let selectedUrl = '';
+    let selectedChannel = '';
     let urlOptionsOpen = false;
     const urlOptions = document.createElement('div');
     urlOptions.className = 'url-options';
@@ -189,15 +212,15 @@ function createCard(card, index) {
     const addButton = document.createElement('button');
     addButton.className = 'url-list-button';
     addButton.textContent = '+';
-    addButton.setAttribute('aria-label', 'Add URL to shared list');
-    addButton.title = 'Add this URL to the shared list, or update the selected URL everywhere';
+    addButton.setAttribute('aria-label', 'Add link to shared list');
+    addButton.title = 'Add this URL to the shared Firestore list';
 
     const deleteButton = document.createElement('button');
     deleteButton.className = 'url-list-button';
     deleteButton.textContent = 'x';
-    deleteButton.setAttribute('aria-label', 'Remove URL from shared list');
-    deleteButton.title = 'Remove this URL from the shared list and all presets';
-    deleteButton.disabled = !getUrlLibrary().includes(input.value.trim());
+    deleteButton.setAttribute('aria-label', 'Delete link from shared list');
+    deleteButton.title = 'Remove this manual URL from the shared Firestore list and presets';
+    deleteButton.disabled = !getLinkByUrl(input.value.trim());
 
     const loadButton = document.createElement('button');
     loadButton.className = 'load-button';
@@ -205,20 +228,21 @@ function createCard(card, index) {
 
     function renderUrlOptions(filter = '') {
         const normalizedFilter = filter.toLocaleLowerCase();
-        const urls = getUrlLibrary().filter(url =>
-            url.toLocaleLowerCase().includes(normalizedFilter)
+        const links = getUrlLibrary().filter(item =>
+            `${item.channel} ${item.link}`.toLocaleLowerCase().includes(normalizedFilter)
         );
         urlOptions.replaceChildren();
-        urls.forEach(url => {
+        links.forEach(item => {
             const option = document.createElement('button');
             option.type = 'button';
             option.className = 'url-option';
             option.setAttribute('role', 'option');
-            option.textContent = url;
+            option.textContent = `${item.channel} — ${item.link}`;
             option.addEventListener('pointerdown', event => event.preventDefault());
             option.addEventListener('click', () => {
-                input.value = url;
-                selectedUrl = url;
+                input.value = item.link;
+                selectedUrl = item.link;
+                selectedChannel = item.channel;
                 deleteButton.disabled = false;
                 urlOptionsOpen = false;
                 urlOptions.hidden = true;
@@ -245,7 +269,7 @@ function createCard(card, index) {
             });
             urlOptions.append(option);
         });
-        urlOptions.hidden = !urlOptionsOpen || urls.length === 0;
+        urlOptions.hidden = !urlOptionsOpen || links.length === 0;
         input.setAttribute('aria-expanded', String(!urlOptions.hidden));
     }
 
@@ -259,9 +283,15 @@ function createCard(card, index) {
 
     input.addEventListener('input', () => {
         const value = input.value.trim();
-        if (getUrlLibrary().includes(value)) selectedUrl = value;
-        else if (!value) selectedUrl = '';
-        deleteButton.disabled = !getUrlLibrary().includes(value);
+        const selectedLink = getLinkByUrl(value);
+        if (selectedLink) {
+            selectedUrl = value;
+            selectedChannel = selectedLink.channel;
+        } else if (!value) {
+            selectedUrl = '';
+            selectedChannel = '';
+        }
+        deleteButton.disabled = !selectedLink;
         urlOptionsOpen = true;
         renderUrlOptions(value);
     });
@@ -338,8 +368,8 @@ function createCard(card, index) {
         if (e.key === 'Enter') load(input.value.trim());
     });
 
-    addButton.onclick = () => addUrlToLibrary(controller);
-    deleteButton.onclick = () => deleteUrlFromLibrary(controller);
+    addButton.onclick = () => { void addUrlToLibrary(controller); };
+    deleteButton.onclick = () => { void deleteUrlFromLibrary(controller); };
 
     const controller = {
         card,
@@ -351,103 +381,198 @@ function createCard(card, index) {
         load,
         unload,
         get selectedUrl() { return selectedUrl; },
-        set selectedUrl(value) { selectedUrl = value; }
+        set selectedUrl(value) { selectedUrl = value; },
+        get selectedChannel() { return selectedChannel; },
+        set selectedChannel(value) { selectedChannel = value; }
     };
     return controller;
 }
 
 function refreshUrlLibrary() {
     controllers.forEach(controller => {
-        controller.deleteButton.disabled =
-            !getUrlLibrary().includes(controller.input.value.trim());
+        controller.deleteButton.disabled = !getLinkByUrl(controller.input.value.trim());
         controller.renderUrlOptions(controller.input.value.trim());
     });
 }
 
-function addUrlToLibrary(controller) {
+let adminPasswordDialog;
+let resolveAdminPassword;
+
+function promptForAdminPassword() {
+    if (adminPasswordDialog?.open) return Promise.resolve(null);
+
+    if (!adminPasswordDialog) {
+        adminPasswordDialog = document.createElement('dialog');
+        adminPasswordDialog.className = 'password-dialog';
+        adminPasswordDialog.setAttribute('aria-labelledby', 'password-dialog-title');
+
+        const form = document.createElement('form');
+        form.className = 'password-dialog-form';
+        form.addEventListener('submit', event => {
+            event.preventDefault();
+            if (!passwordInput.value.trim()) {
+                passwordInput.focus();
+                return;
+            }
+            adminPasswordDialog.close('submit');
+        });
+
+        const title = document.createElement('h2');
+        title.id = 'password-dialog-title';
+        title.textContent = 'Admin password';
+
+        const label = document.createElement('label');
+        label.htmlFor = 'admin-password-input';
+        label.textContent = 'Enter admin password to proceed:';
+
+        const passwordInput = document.createElement('input');
+        passwordInput.id = 'admin-password-input';
+        passwordInput.type = 'password';
+        passwordInput.autocomplete = 'current-password';
+        passwordInput.required = true;
+
+        const buttons = document.createElement('div');
+        buttons.className = 'password-dialog-actions';
+
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.textContent = 'Cancel';
+        cancelButton.addEventListener('click', () => adminPasswordDialog.close('cancel'));
+
+        const submitButton = document.createElement('button');
+        submitButton.type = 'submit';
+        submitButton.textContent = 'Continue';
+
+        buttons.append(cancelButton, submitButton);
+        form.append(title, label, passwordInput, buttons);
+        adminPasswordDialog.append(form);
+        document.body.append(adminPasswordDialog);
+        adminPasswordDialog.addEventListener('close', () => {
+            const password = passwordInput.value;
+            passwordInput.value = '';
+            resolveAdminPassword?.(
+                adminPasswordDialog.returnValue === 'submit' && password.trim()
+                    ? password
+                    : null
+            );
+            resolveAdminPassword = null;
+        });
+    }
+
+    return new Promise(resolve => {
+        resolveAdminPassword = resolve;
+        adminPasswordDialog.showModal();
+        adminPasswordDialog.querySelector('input').focus();
+    });
+}
+
+async function verifyAdminPassword(password) {
+    if (!db) throw new Error('Firebase is not configured. Update firebase-config.js first.');
+    const adminDocument = await getDoc(doc(db, 'config', 'admin'));
+    if (!adminDocument.exists() || typeof adminDocument.data().passwordHash !== 'string') {
+        throw new Error('Firestore config/admin must contain a passwordHash string.');
+    }
+    const passwordBytes = new TextEncoder().encode(password);
+    const digest = await crypto.subtle.digest('SHA-256', passwordBytes);
+    const enteredHash = [...new Uint8Array(digest)]
+        .map(byte => byte.toString(16).padStart(2, '0'))
+        .join('');
+    if (enteredHash !== adminDocument.data().passwordHash.toLowerCase()) {
+        window.alert('Incorrect password!');
+        return false;
+    }
+    return true;
+}
+
+async function authenticateWrite() {
+    if (!auth) throw new Error('Firebase Auth is not configured.');
+    await signInAnonymously(auth);
+}
+
+function showLinkOperationError(error) {
+    console.error('Firestore link operation failed.', error);
+    window.alert(`Could not update the shared links: ${error.message}`);
+}
+
+async function addUrlToLibrary(controller) {
+    const password = await promptForAdminPassword();
+    if (!password) return;
+
     const value = controller.input.value.trim();
     if (!value) return;
 
-    if (controller.selectedUrl && controller.selectedUrl !== value) {
-        updateUrlInLibrary(controller);
-        return;
+    try {
+        if (!await verifyAdminPassword(password)) return;
+        if (getLinkByUrl(value)) {
+            window.alert('This link is already in the shared list.');
+            return;
+        }
+        const parsedLink = new URL(value);
+        if (!['http:', 'https:'].includes(parsedLink.protocol)) {
+            throw new Error('Enter a link that starts with http:// or https://.');
+        }
+        const channel = controller.selectedUrl === value && controller.selectedChannel
+            ? controller.selectedChannel
+            : parsedLink.hostname.replace(/^www\./i, '') || 'Link';
+        await authenticateWrite();
+        const linkDocument = await addDoc(collection(db, 'links'), {
+            channel,
+            link: value,
+            status: 'manual'
+        });
+        linkRows.push({ id: linkDocument.id, channel, link: value, status: 'manual' });
+        controller.selectedUrl = value;
+        controller.selectedChannel = channel;
+        refreshUrlLibrary();
+    } catch (error) {
+        showLinkOperationError(error);
     }
-
-    const urls = readStoredUrlList(URL_LIBRARY_STORAGE_KEY);
-    const removedUrls = getRemovedUrls();
-    removedUrls.delete(value);
-    urls.push(value);
-    writeUrlLibrary(urls, removedUrls);
-
-    controller.selectedUrl = value;
-    refreshUrlLibrary();
 }
 
-function updateUrlInLibrary(controller) {
-    const value = controller.input.value.trim();
-    const originalUrl = controller.selectedUrl;
-    if (!originalUrl || !value || originalUrl === value) return;
+async function deleteUrlFromLibrary(controller) {
+    const password = await promptForAdminPassword();
+    if (!password) return;
 
-    const urls = readStoredUrlList(URL_LIBRARY_STORAGE_KEY);
-    const removedUrls = getRemovedUrls();
-    const updatedChannels = new Set();
-
-    for (let presetIndex = 0; presetIndex < window.DEFAULT_PRESETS.length; presetIndex++) {
-        for (let index = 0; index < channelCount; index++) {
-            if (getPresetUrl(presetIndex, index) === originalUrl) {
-                localStorage.setItem(`${PRESET_STORAGE_PREFIX}${presetIndex}-${index}`, value);
-                if (presetIndex === activePresetIndex) updatedChannels.add(index);
-            }
-        }
-    }
-
-    removedUrls.add(originalUrl);
-    removedUrls.delete(value);
-    const updatedUrls = urls.map(url => url === originalUrl ? value : url);
-    updatedUrls.push(value);
-    writeUrlLibrary(updatedUrls, removedUrls);
-
-    controllers.forEach((current, index) => {
-        if (current.input.value.trim() === originalUrl || updatedChannels.has(index)) {
-            current.input.value = value;
-            if (!current.card.hidden) current.load(value);
-        }
-        if (current.selectedUrl === originalUrl) current.selectedUrl = value;
-    });
-
-    controller.input.value = value;
-    controller.selectedUrl = value;
-    refreshUrlLibrary();
-}
-
-function deleteUrlFromLibrary(controller) {
     const url = controller.input.value.trim();
-    if (!url || !getUrlLibrary().includes(url)) return;
+    if (!url) return;
 
-    for (let presetIndex = 0; presetIndex < window.DEFAULT_PRESETS.length; presetIndex++) {
-        for (let index = 0; index < channelCount; index++) {
-            if (getPresetUrl(presetIndex, index) === url) {
-                localStorage.setItem(
-                    `${PRESET_STORAGE_PREFIX}${presetIndex}-${index}`,
-                    EMPTY_PRESET_VALUE
-                );
+    try {
+        if (!await verifyAdminPassword(password)) return;
+        const link = getLinkByUrl(url);
+        if (!link) return;
+        if (link.status === 'default') {
+            window.alert('This is a permanent default row and cannot be deleted.');
+            return;
+        }
+        await authenticateWrite();
+        await deleteDoc(doc(db, 'links', link.id));
+        linkRows = linkRows.filter(item => item.id !== link.id);
+
+        for (let presetIndex = 0; presetIndex < window.DEFAULT_PRESETS.length; presetIndex++) {
+            for (let index = 0; index < channelCount; index++) {
+                if (getPresetUrl(presetIndex, index) === url) {
+                    localStorage.setItem(
+                        `${PRESET_STORAGE_PREFIX}${presetIndex}-${index}`,
+                        EMPTY_PRESET_VALUE
+                    );
+                }
             }
         }
+
+        controllers.forEach(current => {
+            if (current.input.value.trim() === url) {
+                current.input.value = '';
+                current.unload();
+            }
+            if (current.selectedUrl === url) {
+                current.selectedUrl = '';
+                current.selectedChannel = '';
+            }
+        });
+        refreshUrlLibrary();
+    } catch (error) {
+        showLinkOperationError(error);
     }
-
-    const urls = readStoredUrlList(URL_LIBRARY_STORAGE_KEY).filter(savedUrl => savedUrl !== url);
-    const removedUrls = getRemovedUrls();
-    removedUrls.add(url);
-    writeUrlLibrary(urls, removedUrls);
-
-    controllers.forEach(current => {
-        if (current.input.value.trim() === url) {
-            current.input.value = '';
-            current.unload();
-        }
-        if (current.selectedUrl === url) current.selectedUrl = '';
-    });
-    refreshUrlLibrary();
 }
 
 // ----- Initialize cards -----
